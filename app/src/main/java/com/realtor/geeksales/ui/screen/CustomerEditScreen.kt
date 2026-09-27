@@ -86,6 +86,22 @@ fun CustomerEditScreen(
             GeekTextField(form.source, { vm.update { f -> f.copy(source = it) } }, label = "来源", placeholder = "端口-安居客/朋友转介绍/到访…")
             GeekTextField(form.tags, { vm.update { f -> f.copy(tags = it) } }, label = "标签 (逗号分隔)", placeholder = "学区房, 地铁, 急售")
 
+            Section("联系信息")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GeekTextField(form.email, { vm.update { f -> f.copy(email = it) } }, label = "邮箱", modifier = Modifier.weight(1f), placeholder = "name@example.com")
+                GeekTextField(form.im, { vm.update { f -> f.copy(im = it) } }, label = "即时消息", modifier = Modifier.weight(1f), placeholder = "微信/QQ")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GeekTextField(form.company, { vm.update { f -> f.copy(company = it) } }, label = "公司", modifier = Modifier.weight(1f), placeholder = "公司/门店")
+                GeekTextField(form.jobTitle, { vm.update { f -> f.copy(jobTitle = it) } }, label = "职位", modifier = Modifier.weight(1f), placeholder = "职业")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GeekTextField(form.birthday, { vm.update { f -> f.copy(birthday = it) } }, label = "生日", modifier = Modifier.weight(1f), placeholder = "1990-01-01")
+                GeekTextField(form.nickname, { vm.update { f -> f.copy(nickname = it) } }, label = "昵称", modifier = Modifier.weight(1f), placeholder = "别称")
+            }
+            GeekTextField(form.address, { vm.update { f -> f.copy(address = it) } }, label = "地址", placeholder = "常用地址")
+            GeekTextField(form.website, { vm.update { f -> f.copy(website = it) } }, label = "网站", placeholder = "https://…")
+
             Section("购房需求")
             GeekTextField(form.areaPref, { vm.update { f -> f.copy(areaPref = it) } }, label = "意向区域", placeholder = "朝阳国贸 | 通州副中心")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -20,7 +20,7 @@ class Converters {
         Tag::class,
         CustomerTagMap::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -33,7 +33,19 @@ abstract class AppDatabase : RoomDatabase() {
         const val NAME = "geek_sales.db"
 
         val MIGRATIONS = arrayOf<androidx.room.migration.Migration>(
-            // 未来 schema 变更时在此添加 Migration
+            // v1 → v2：新增通讯录对齐字段（email/company/jobTitle/address/nickname/website/birthday/im）
+            object : androidx.room.migration.Migration(1, 2) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE customers ADD COLUMN email TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN company TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN jobTitle TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN address TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN nickname TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN website TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN birthday TEXT")
+                    db.execSQL("ALTER TABLE customers ADD COLUMN im TEXT")
+                }
+            }
         )
     }
 }

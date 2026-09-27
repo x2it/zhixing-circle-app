@@ -22,4 +22,18 @@ interface FollowUpDao {
 
     @Query("SELECT COUNT(*) FROM follow_ups WHERE createdAt >= :dayStart AND createdAt < :dayEnd")
     suspend fun countToday(dayStart: Long, dayEnd: Long): Int
+
+    /** 下一个未到期的跟进提醒（含客户名），用于排定 Alarm */
+    @Query("""
+        SELECT f.remindAt AS remindAt, c.name AS customerName
+        FROM follow_ups f JOIN customers c ON c.id = f.customerId
+        WHERE f.remindAt IS NOT NULL AND f.remindAt > :now
+        ORDER BY f.remindAt ASC LIMIT 1
+    """)
+    suspend fun nextReminder(now: Long): ReminderRow?
 }
+
+data class ReminderRow(
+    val remindAt: Long,
+    val customerName: String
+)

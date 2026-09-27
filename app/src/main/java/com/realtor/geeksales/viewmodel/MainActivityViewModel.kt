@@ -10,10 +10,13 @@ import com.realtor.geeksales.data.repo.CustomerRepository
 import com.realtor.geeksales.telephony.CallObserver
 import com.realtor.geeksales.telephony.DialerHelper
 import com.realtor.geeksales.telephony.PostCallReceiver
+import com.realtor.geeksales.telephony.ReminderScheduler
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -30,11 +33,12 @@ class MainActivityViewModel @Inject constructor(
     private val repo: CustomerRepository,
     private val callObserver: CallObserver,
     private val postCallReceiver: PostCallReceiver,
-    private val dialerHelper: DialerHelper
+    private val dialerHelper: DialerHelper,
+    private val reminderScheduler: ReminderScheduler
 ) : AndroidViewModel(app) {
 
     private val _postCallPrompt = MutableStateFlow<PostCallPrompt?>(null)
-    val postCallPrompt: MutableStateFlow<PostCallPrompt?> = _postCallPrompt
+    val postCallPrompt: StateFlow<PostCallPrompt?> = _postCallPrompt.asStateFlow()
 
     private var lastOffHookAt: Long = 0L
     private var lastPhoneNumber: String = ""
@@ -75,7 +79,10 @@ class MainActivityViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 postCallReceiver.postCallEvents().collect { (phone, dur) ->
+                    // 兜底：呼出电话的 incomingNumber 恒为空（Android 12+ 无 READ_CALL_LOG 时亦然），
+                    // 用本 App 最近拨出的号码匹配客户，避免"自己拨的电话登记成未知号码"。
                     val norm = Formatter.normalizePhone(phone)
+                        .ifBlank { dialerHelper.lastDialedPhone }
                     val c = if (norm.isNotBlank()) repo.getByPhoneNormalized(norm) else null
                     if (c != null) {
                         _postCallPrompt.value = PostCallPrompt(
@@ -88,10 +95,12 @@ class MainActivityViewModel @Inject constructor(
                         _postCallPrompt.value = PostCallPrompt(
                             customerId = 0L,
                             customerName = "未知号码",
-                            phone = phone,
+                            phone = norm.ifBlank { phone },
                             durationSec = dur
                         )
                     }
+                    // 消费后清空，避免陈旧号码误匹配下一次无关通话
+                    dialerHelper.clearLastDialed()
                 }
             }.onFailure { it.printStackTrace() }
         }
@@ -130,6 +139,8 @@ class MainActivityViewModel @Inject constructor(
                     remindAt = remindAt,
                     fromPostCall = true
                 )
+                // 登记了下次跟进 → 重排闹钟
+                if (remindAt != null) reminderScheduler.scheduleNext()
             }
             _postCallPrompt.value = null
         }.onFailure { it.printStackTrace() }

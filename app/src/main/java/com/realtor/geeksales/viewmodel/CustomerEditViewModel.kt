@@ -31,7 +31,16 @@ data class EditFormState(
     val intentLevel: IntentLevel = IntentLevel.U,
     val note: String = "",
     val nextFollowAt: Long? = null,
-    val tags: String = ""
+    val tags: String = "",
+    // 通讯录对齐字段
+    val email: String = "",
+    val company: String = "",
+    val jobTitle: String = "",
+    val address: String = "",
+    val nickname: String = "",
+    val website: String = "",
+    val birthday: String = "",
+    val im: String = ""
 )
 
 @HiltViewModel
@@ -59,6 +68,8 @@ class CustomerEditViewModel @Inject constructor(
         if (id == 0L) return@launch
         val c = repo.getById(id) ?: return@launch
         loadedId = id
+        // 回显已有标签，避免编辑保存时 unlinkAll 误删原标签（数据丢失）
+        val existingTags = repo.tagsOf(id).joinToString(", ")
         _form.value = EditFormState(
             id = c.id,
             name = c.name,
@@ -76,7 +87,15 @@ class CustomerEditViewModel @Inject constructor(
             intentLevel = c.intentLevel,
             note = c.note ?: "",
             nextFollowAt = c.nextFollowAt,
-            tags = ""
+            tags = existingTags,
+            email = c.email ?: "",
+            company = c.company ?: "",
+            jobTitle = c.jobTitle ?: "",
+            address = c.address ?: "",
+            nickname = c.nickname ?: "",
+            website = c.website ?: "",
+            birthday = c.birthday ?: "",
+            im = c.im ?: ""
         )
     }
 
@@ -87,7 +106,7 @@ class CustomerEditViewModel @Inject constructor(
     fun save() = viewModelScope.launch {
         val f = _form.value
         if (f.name.isBlank() || !Formatter.isValidCnPhone(f.phone)) return@launch
-        val tags = f.tags.split(',', '，', ';', ';', '|').map { it.trim() }.filter { it.isNotBlank() }
+        val tags = f.tags.split(',', '，', ';', '|').map { it.trim() }.filter { it.isNotBlank() }
         val id = repo.upsert(
             Customer(
                 id = f.id,
@@ -106,7 +125,15 @@ class CustomerEditViewModel @Inject constructor(
                 targetProject = f.targetProject.takeIf { it.isNotBlank() },
                 intentLevel = f.intentLevel,
                 note = f.note.takeIf { it.isNotBlank() },
-                nextFollowAt = f.nextFollowAt
+                nextFollowAt = f.nextFollowAt,
+                email = f.email.takeIf { it.isNotBlank() },
+                company = f.company.takeIf { it.isNotBlank() },
+                jobTitle = f.jobTitle.takeIf { it.isNotBlank() },
+                address = f.address.takeIf { it.isNotBlank() },
+                nickname = f.nickname.takeIf { it.isNotBlank() },
+                website = f.website.takeIf { it.isNotBlank() },
+                birthday = f.birthday.takeIf { it.isNotBlank() },
+                im = f.im.takeIf { it.isNotBlank() }
             ),
             tags.takeIf { it.isNotEmpty() }
         )

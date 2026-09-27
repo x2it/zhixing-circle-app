@@ -119,6 +119,14 @@ fun CustomerDetailScreen(
                             }
                             if (!customer.phone2.isNullOrBlank()) Row { Text("备用  ", color = TextMuted, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.width(4.dp)); Text(customer.phone2!!, color = TextSecondary, style = MaterialTheme.typography.bodyMedium) }
                             KV("性别", customer.gender); KV("年龄", customer.age?.toString()); KV("微信", customer.wechat); KV("来源", customer.source)
+                            KV("邮箱", customer.email)
+                            val org = listOfNotNull(customer.company, customer.jobTitle).joinToString(" · ").takeIf { it.isNotBlank() }
+                            KV("公司/职位", org)
+                            KV("地址", customer.address)
+                            KV("昵称", customer.nickname)
+                            KV("生日", customer.birthday)
+                            KV("网站", customer.website)
+                            KV("即时消息", customer.im)
                             KV("区域", customer.areaPref)
                             val budget = buildString {
                                 if (customer.budgetMinWan != null) append(customer.budgetMinWan)

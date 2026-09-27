@@ -20,7 +20,9 @@ data class ImportReport(
     val success: Int = 0,
     val duplicated: Int = 0,
     val invalid: Int = 0,
-    val total: Int = 0
+    val total: Int = 0,
+    /** 非空表示导入失败（文件无法读取/解析），success 等字段无意义 */
+    val error: String? = null
 )
 
 @Singleton
@@ -32,7 +34,9 @@ class CsvManager @Inject constructor(
         val HEADERS = arrayOf(
             "姓名", "手机号", "备用电话", "性别", "年龄",
             "微信", "来源", "意向区域", "预算(万)下限", "预算(万)上限",
-            "房型", "意向楼盘", "意向等级(A/B/C/D/U)", "备注", "下次跟进(YYYY-MM-DD)"
+            "房型", "意向楼盘", "意向等级(A/B/C/D/U)", "备注", "下次跟进(YYYY-MM-DD)",
+            // v1.7：通讯录对齐扩展列（可选，旧模板可继续使用）
+            "邮箱", "公司", "职位", "地址", "昵称", "网站", "生日(YYYY-MM-DD)", "即时消息"
         )
     }
 
@@ -85,13 +89,24 @@ class CsvManager @Inject constructor(
                             d?.time
                         }.getOrNull()
                     }
+                    val email = cells.getOrNull(15)?.trim().takeIf { !it.isNullOrBlank() }
+                    val company = cells.getOrNull(16)?.trim().takeIf { !it.isNullOrBlank() }
+                    val jobTitle = cells.getOrNull(17)?.trim().takeIf { !it.isNullOrBlank() }
+                    val address = cells.getOrNull(18)?.trim().takeIf { !it.isNullOrBlank() }
+                    val nickname = cells.getOrNull(19)?.trim().takeIf { !it.isNullOrBlank() }
+                    val website = cells.getOrNull(20)?.trim().takeIf { !it.isNullOrBlank() }
+                    val birthday = cells.getOrNull(21)?.trim().takeIf { !it.isNullOrBlank() }
+                    val im = cells.getOrNull(22)?.trim().takeIf { !it.isNullOrBlank() }
                     parsed += Customer(
                         name = name, phone = phone, phoneNormalized = norm,
                         phone2 = phone2, gender = gender, age = age, wechat = wechat,
                         source = source, areaPref = areaPref,
                         budgetMinWan = budgetMin, budgetMaxWan = budgetMax,
                         houseType = houseType, targetProject = targetProject,
-                        intentLevel = level, note = note, nextFollowAt = nextAt
+                        intentLevel = level, note = note, nextFollowAt = nextAt,
+                        email = email, company = company, jobTitle = jobTitle,
+                        address = address, nickname = nickname, website = website,
+                        birthday = birthday, im = im
                     )
                     if (parsed.size % 500 == 0) kotlinx.coroutines.yield()
                 }
@@ -112,6 +127,8 @@ class CsvManager @Inject constructor(
                     kotlinx.coroutines.yield()
                 }
             }
+        }.getOrElse { t ->
+            return@withContext ImportReport(error = t.message ?: t.javaClass.simpleName)
         }
         ImportReport(ok, dup, invalid, total)
     }
@@ -132,7 +149,10 @@ class CsvManager @Inject constructor(
                     c.budgetMinWan?.toString().orEmpty(), c.budgetMaxWan?.toString().orEmpty(),
                     c.houseType.orEmpty(), c.targetProject.orEmpty(),
                     c.intentLevel.name, c.note.orEmpty(),
-                    if (c.nextFollowAt == null) "" else sdf.format(java.util.Date(c.nextFollowAt))
+                    if (c.nextFollowAt == null) "" else sdf.format(java.util.Date(c.nextFollowAt)),
+                    c.email.orEmpty(), c.company.orEmpty(), c.jobTitle.orEmpty(),
+                    c.address.orEmpty(), c.nickname.orEmpty(), c.website.orEmpty(),
+                    c.birthday.orEmpty(), c.im.orEmpty()
                 ))
             }
             writer.flushQuietly()

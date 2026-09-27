@@ -2,6 +2,7 @@
 
 import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.CustomerDao
+import com.realtor.geeksales.data.db.CustomerTagMap
 import com.realtor.geeksales.data.db.FollowUp
 import com.realtor.geeksales.data.db.FollowUpDao
 import com.realtor.geeksales.data.db.FollowResult
@@ -83,25 +84,33 @@ class CustomerRepository @Inject constructor(
             tagDao.unlinkAllForCustomer(id)
             tags.filter { it.isNotBlank() }.distinct().forEach { name ->
                 val tagId = tagDao.createIfAbsent(Tag(name = name))
-                    .takeIf { it > 0 } ?: tagDao.observeAll()
-                    .let { tag -> // best effort; fallback ignored
-                    0L
-                }
-                // get existing id if create returned 0 (conflict ignored, but we want the existing PK)
-                val resolvedId = if (tagId > 0) tagId else runCatching {
-                    findTagIdByName(name)
-                }.getOrDefault(0L)
+                // createIfAbsent 在标签已存在时（IGNORE 冲突）返回 -1，
+                // 此时必须查回已有 id，否则该客户永远关联不上已存在的标签。
+                val resolvedId = if (tagId > 0) tagId else tagDao.getByName(name)?.id ?: 0L
                 if (resolvedId > 0) {
-                    tagDao.link(com.realtor.geeksales.data.db.CustomerTagMap(id, resolvedId))
+                    tagDao.link(CustomerTagMap(id, resolvedId))
                 }
             }
         }
         return id
     }
 
-    private suspend fun findTagIdByName(name: String): Long {
-        // simple workaround: re-fetch by select not exposed, try insert again then scan (safe small table)
-        return 0L
+    /** 读取客户现有标签名，用于编辑页回显（避免保存时误删原标签） */
+    suspend fun tagsOf(customerId: Long): List<String> =
+        tagDao.getForCustomer(customerId).map { it.name }
+
+    /** 仅给客户挂标签（不重写客户数据），用于通讯录导入的群组映射等批量场景 */
+    suspend fun applyTags(customerId: Long, tags: List<String>) {
+        if (customerId <= 0L) return
+        val names = tags.filter { it.isNotBlank() }.distinct()
+        if (names.isEmpty()) return
+        names.forEach { name ->
+            val tagId = tagDao.createIfAbsent(Tag(name = name))
+            val resolvedId = if (tagId > 0) tagId else tagDao.getByName(name)?.id ?: 0L
+            if (resolvedId > 0) {
+                tagDao.link(CustomerTagMap(customerId, resolvedId))
+            }
+        }
     }
 
     suspend fun deleteById(id: Long) = customerDao.deleteById(id)

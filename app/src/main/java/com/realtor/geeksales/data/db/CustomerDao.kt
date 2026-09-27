@@ -6,15 +6,21 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CustomerDao {
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /**
+     * 使用 @Upsert（INSERT ... ON CONFLICT DO UPDATE）而非 REPLACE：
+     * REPLACE 在 SQLite 里是"删旧行再插新行"，会触发 follow_ups 外键 CASCADE，
+     * 导致编辑客户时该客户的全部跟进记录被清空（严重数据丢失 bug）。
+     */
+    @Upsert
     suspend fun upsert(customer: Customer): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertAll(customers: List<Customer>): List<Long>
 
     @Update

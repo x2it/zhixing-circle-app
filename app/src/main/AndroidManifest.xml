@@ -53,7 +53,7 @@
         </activity>
 
         <receiver
-            android:name=".telephony.PostCallReceiver"
+            android:name=".telephony.ReminderReceiver"
             android:exported="false" />
 
         <provider

@@ -68,7 +68,15 @@ class ExcelManager @Inject constructor(
                         targetProject = row.getCell(11)?.str()?.takeIf { it.isNotBlank() },
                         intentLevel = level,
                         note = row.getCell(13)?.str()?.takeIf { it.isNotBlank() },
-                        nextFollowAt = row.getCell(14)?.date()?.time
+                        nextFollowAt = row.getCell(14)?.date()?.time,
+                        email = row.getCell(15)?.str()?.takeIf { it.isNotBlank() },
+                        company = row.getCell(16)?.str()?.takeIf { it.isNotBlank() },
+                        jobTitle = row.getCell(17)?.str()?.takeIf { it.isNotBlank() },
+                        address = row.getCell(18)?.str()?.takeIf { it.isNotBlank() },
+                        nickname = row.getCell(19)?.str()?.takeIf { it.isNotBlank() },
+                        website = row.getCell(20)?.str()?.takeIf { it.isNotBlank() },
+                        birthday = row.getCell(21)?.str()?.takeIf { it.isNotBlank() },
+                        im = row.getCell(22)?.str()?.takeIf { it.isNotBlank() }
                     )
                     if (parsed.size % 500 == 0) kotlinx.coroutines.yield()
                 }
@@ -90,6 +98,9 @@ class ExcelManager @Inject constructor(
                     kotlinx.coroutines.yield()
                 }
             }
+        }.getOrElse { t ->
+            runCatching { tmp.delete() }
+            return@withContext ImportReport(error = t.message ?: t.javaClass.simpleName)
         }
         runCatching { tmp.delete() }
         ImportReport(ok, dup, invalid, total)
@@ -107,7 +118,10 @@ class ExcelManager @Inject constructor(
                     c.age?.toString() ?: "", c.wechat.orEmpty(), c.source.orEmpty(),
                     c.areaPref.orEmpty(), c.budgetMinWan?.toString() ?: "", c.budgetMaxWan?.toString() ?: "",
                     c.houseType.orEmpty(), c.targetProject.orEmpty(), c.intentLevel.name,
-                    c.note.orEmpty(), if (c.nextFollowAt == null) "" else sdf.format(java.util.Date(c.nextFollowAt))
+                    c.note.orEmpty(), if (c.nextFollowAt == null) "" else sdf.format(java.util.Date(c.nextFollowAt)),
+                    c.email.orEmpty(), c.company.orEmpty(), c.jobTitle.orEmpty(),
+                    c.address.orEmpty(), c.nickname.orEmpty(), c.website.orEmpty(),
+                    c.birthday.orEmpty(), c.im.orEmpty()
                 )
             )
         }
@@ -119,8 +133,8 @@ class ExcelManager @Inject constructor(
     suspend fun templateTo(uri: Uri): Unit = withContext(Dispatchers.IO) {
         val rows = listOf(
             HEADERS.toList(),
-            listOf("张三", "13800138000", "010-12345678", "男", "30", "zhangsan_wx", "端口-安居客", "朝阳国贸", "400", "600", "三居", "国贸·天誉", "A", "想 8 月看房", "2025-08-30"),
-            listOf("李四", "13900139000", "", "女", "45", "", "朋友转介绍", "通州副中心", "", "900", "叠拼", "运河铭著", "B", "周末可能有时间", "")
+            listOf("张三", "13800138000", "010-12345678", "男", "30", "zhangsan_wx", "端口-安居客", "朝阳国贸", "400", "600", "三居", "国贸·天誉", "A", "想 8 月看房", "2025-08-30", "zhangsan@example.com", "链家地产", "资深顾问", "北京朝阳区建国路 88 号", "三哥", "https://example.com/zhangsan", "1990-01-01", "zhangsan_wx"),
+            listOf("李四", "13900139000", "", "女", "45", "", "朋友转介绍", "通州副中心", "", "900", "叠拼", "运河铭著", "B", "周末可能有时间", "", "", "", "", "", "", "", "", "")
         )
         val os = ctx.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("无法写入文件，请检查存储权限")
         os.use { XlsxWriter.write(it, "客户模板", rows) }

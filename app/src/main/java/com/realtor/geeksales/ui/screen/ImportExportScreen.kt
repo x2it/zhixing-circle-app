@@ -153,11 +153,13 @@ fun ImportExportScreen(
                         Text(status.message, color = c, style = MaterialTheme.typography.bodyMedium)
                     }
                     status.report?.let { r ->
-                        Spacer(Modifier.height(4.dp))
-                        Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                        Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
-                        Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
-                        Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
+                        if (r.error == null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+                            Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
+                            Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
+                            Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                     status.exportCount?.let { n ->
                         Spacer(Modifier.height(4.dp))
@@ -177,7 +179,7 @@ fun ImportExportScreen(
                     Text("字段说明", color = TextMuted, style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "列顺序(CSV/XLSX)：姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、预算下限(万)、预算上限(万)、房型、意向楼盘、意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)。第一行为表头(中文)。重复手机号自动去重。",
+                        "列顺序(CSV/XLSX)：姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、预算下限(万)、预算上限(万)、房型、意向楼盘、意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)、邮箱、公司、职位、地址、昵称、网站、生日(YYYY-MM-DD)、即时消息。扩展列可选，第一行为表头(中文)。重复手机号自动去重。",
                         color = TextPrimary, style = MaterialTheme.typography.bodyMedium
                     )
                 }

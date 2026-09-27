@@ -6,6 +6,7 @@ import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.repo.CustomerRepository
 import com.realtor.geeksales.telephony.DialerHelper
+import com.realtor.geeksales.telephony.ReminderScheduler
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,7 +22,8 @@ import javax.inject.Inject
 @HiltViewModel
 class CustomerDetailViewModel @Inject constructor(
     private val repo: CustomerRepository,
-    private val dialerHelper: DialerHelper
+    private val dialerHelper: DialerHelper,
+    private val reminderScheduler: ReminderScheduler
 ) : ViewModel() {
 
     private val idFlow = MutableStateFlow(0L)
@@ -53,6 +55,8 @@ class CustomerDetailViewModel @Inject constructor(
             runCatching {
                 val id = customer.value?.id ?: return@launch
                 repo.recordFollowUp(id, result, durationSec, note, remindAt)
+                // 登记了下次跟进 → 重排闹钟
+                if (remindAt != null) reminderScheduler.scheduleNext()
             }.onFailure { it.printStackTrace() }
         }
 

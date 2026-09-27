@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.realtor.geeksales"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.realtor.geeksales"
         minSdk = 31
-        targetSdk = 35
-        versionCode = 19
-        versionName = "1.6.3"
+        targetSdk = 36
+        versionCode = 20
+        versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

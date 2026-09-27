@@ -38,6 +38,23 @@ data class Customer(
     val note: String? = null,
     /** 下次跟进时间 (EpochMillis UTC) */
     val nextFollowAt: Long? = null,
+    // ---- 通讯录对齐字段（v2）：与系统联系人可双向映射 ----
+    /** 邮箱 */
+    val email: String? = null,
+    /** 公司 */
+    val company: String? = null,
+    /** 职位 */
+    val jobTitle: String? = null,
+    /** 地址（常用地址，单行文本） */
+    val address: String? = null,
+    /** 昵称 */
+    val nickname: String? = null,
+    /** 网站 */
+    val website: String? = null,
+    /** 生日（YYYY-MM-DD 字符串，系统 Event.BIRTHDAY 对应） */
+    val birthday: String? = null,
+    /** 即时消息（微信/QQ 等，对应系统 IM 字段） */
+    val im: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     /** 是否已导入拨号队列 */

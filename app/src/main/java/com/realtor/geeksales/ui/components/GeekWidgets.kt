@@ -238,9 +238,10 @@ fun StatTile(label: String, value: String, hint: String? = null, accent: Color =
                 style = MaterialTheme.typography.labelMedium
             )
             Spacer(Modifier.height(6.dp))
+            // 终端风：数字用 "[ N ]" 包裹，与整体 ASCII 风格呼应
             Text(
-                text = value,
-                color = TextPrimary,
+                text = "[ $value ]",
+                color = accent,
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.headlineLarge
             )
