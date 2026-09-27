@@ -26,4 +26,19 @@ interface TagDao {
 
     @Query("DELETE FROM customer_tag_map WHERE customerId = :customerId")
     suspend fun unlinkAllForCustomer(customerId: Long)
+
+    @Query("DELETE FROM customer_tag_map WHERE customerId = :customerId AND tagId = :tagId")
+    suspend fun deleteMap(customerId: Long, tagId: Long)
+
+    @Query("SELECT * FROM tags ORDER BY name ASC")
+    suspend fun getAll(): List<Tag>
+
+    @Query("SELECT * FROM customer_tag_map")
+    suspend fun getAllMappings(): List<CustomerTagMap>
+
+    @Query("DELETE FROM customer_tag_map")
+    suspend fun clearMappings()
+
+    @Query("DELETE FROM tags")
+    suspend fun clearAll()
 }

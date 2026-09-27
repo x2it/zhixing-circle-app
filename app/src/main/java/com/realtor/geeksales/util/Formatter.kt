@@ -46,4 +46,16 @@ object Formatter {
 
     fun addDays(anchor: Long, days: Int): Long = anchor + days * 86400_000L
     fun addHours(anchor: Long, hours: Int): Long = anchor + hours * 3600_000L
+
+    /** "yyyy-MM-dd" → EpochMillis（知行朋友圈日期格式）；解析失败返回 null */
+    fun dayToEpoch(s: String?): Long? {
+        if (s.isNullOrBlank()) return null
+        return runCatching { sdfDay.get().parse(s)?.time }.getOrNull()
+    }
+
+    /** EpochMillis → "yyyy-MM-dd"；null/非法返回 null */
+    fun epochToDay(ms: Long?): String? {
+        if (ms == null || ms <= 0) return null
+        return runCatching { sdfDay.get().format(Date(ms)) }.getOrNull()
+    }
 }

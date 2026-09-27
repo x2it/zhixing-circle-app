@@ -23,6 +23,16 @@ interface FollowUpDao {
     @Query("SELECT COUNT(*) FROM follow_ups WHERE createdAt >= :dayStart AND createdAt < :dayEnd")
     suspend fun countToday(dayStart: Long, dayEnd: Long): Int
 
+    @Query("SELECT * FROM follow_ups ORDER BY createdAt ASC")
+    suspend fun getAll(): List<FollowUp>
+
+    /** 按客户 + 备注 + 日期查重（用于知行朋友圈跟进记录去重） */
+    @Query("SELECT * FROM follow_ups WHERE customerId = :customerId AND note = :note AND createdAt = :createdAt LIMIT 1")
+    suspend fun findByDedupKey(customerId: Long, note: String?, createdAt: Long): FollowUp?
+
+    @Insert
+    suspend fun insertAll(followUps: List<FollowUp>)
+
     /** 下一个未到期的跟进提醒（含客户名），用于排定 Alarm */
     @Query("""
         SELECT f.remindAt AS remindAt, c.name AS customerName

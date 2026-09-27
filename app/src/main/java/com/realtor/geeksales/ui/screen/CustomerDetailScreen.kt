@@ -57,6 +57,7 @@ fun CustomerDetailScreen(
 ) {
     val c by vm.customer.collectAsStateWithLifecycle()
     val list by vm.followUps.collectAsStateWithLifecycle()
+    val smsList by vm.smsMessages.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(id) { vm.setCustomerId(id) }
     // 超时降级：3 秒仍未加载出客户，显示明确错误态而非无限转圈（历史"看似假死"来源之一）
     var loadTimeout by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -170,7 +171,40 @@ fun CustomerDetailScreen(
             } else {
                 items(list) { f -> FollowItem(f) }
             }
+            item { AsciiDivider(Modifier.padding(horizontal = 12.dp)) }
+            item {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("短信记录", color = Accent, style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.width(8.dp))
+                        Text("（知行朋友圈同步）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+            if (smsList.isEmpty()) {
+                item { EmptyState("暂无云端短信", "在「数据」页从知行朋友圈拉取短信后，这里会显示与该客户相关的短信。") }
+            } else {
+                items(smsList) { s -> SmsItem(s) }
+            }
             item { Spacer(Modifier.height(100.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun SmsItem(s: com.realtor.geeksales.data.db.SmsMessage) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)) {
+        Column(Modifier.background(BgElev2).padding(12.dp).border(1.dp, Divider)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (s.direction == "in") "收" else "发", color = if (s.direction == "in") Success else Accent, style = MaterialTheme.typography.labelLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Spacer(Modifier.width(10.dp))
+                Text(s.phone, color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
+                Text(Formatter.full(s.messageDate), color = TextMuted, style = MaterialTheme.typography.labelMedium)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(s.body, color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

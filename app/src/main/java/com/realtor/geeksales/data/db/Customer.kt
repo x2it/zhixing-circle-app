@@ -55,6 +55,8 @@ data class Customer(
     val birthday: String? = null,
     /** 即时消息（微信/QQ 等，对应系统 IM 字段） */
     val im: String? = null,
+    /** 知行朋友圈（线上）联系人 id，双向同步映射用 */
+    val wbContactId: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     /** 是否已导入拨号队列 */

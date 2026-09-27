@@ -11,24 +11,28 @@ import java.util.zip.ZipOutputStream
  */
 object XlsxWriter {
 
+    /** 单表写入（兼容旧调用） */
     fun write(out: OutputStream, sheetName: String, rows: List<List<String>>) {
-        ZipOutputStream(out.buffered()).use { zip ->
-            zip.putNextEntry(ZipEntry("[Content_Types].xml")); zip.write(CONTENT_TYPES); zip.closeEntry()
-            zip.putNextEntry(ZipEntry("_rels/.rels")); zip.write(ROOT_RELS); zip.closeEntry()
-            zip.putNextEntry(ZipEntry("xl/workbook.xml")); zip.write(workbookXml(sheetName)); zip.closeEntry()
-            zip.putNextEntry(ZipEntry("xl/_rels/workbook.xml.rels")); zip.write(WORKBOOK_RELS); zip.closeEntry()
-            zip.putNextEntry(ZipEntry("xl/worksheets/sheet1.xml")); zip.write(sheetXml(rows)); zip.closeEntry()
-        }
+        writeMulti(out, listOf(sheetName to rows))
     }
 
-    private val CONTENT_TYPES: ByteArray =
-        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>""".trimIndent().toByteArray(Charsets.UTF_8)
+    /** 多表写入：sheets = [(表名, 行)]，用于时光机快照（客户/跟进/标签/短信） */
+    fun writeMulti(out: OutputStream, sheets: List<Pair<String, List<List<String>>>>) {
+        val safe = sheets.map { (name, rows) -> (name.take(31)) to rows }
+        ZipOutputStream(out.buffered()).use { zip ->
+            zip.putNextEntry(ZipEntry("[Content_Types].xml"))
+            zip.write(contentTypes(safe.size))
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("_rels/.rels")); zip.write(ROOT_RELS); zip.closeEntry()
+            zip.putNextEntry(ZipEntry("xl/workbook.xml")); zip.write(workbookXml(safe)); zip.closeEntry()
+            zip.putNextEntry(ZipEntry("xl/_rels/workbook.xml.rels")); zip.write(workbookRels(safe.size)); zip.closeEntry()
+            safe.forEachIndexed { i, (_, rows) ->
+                zip.putNextEntry(ZipEntry("xl/worksheets/sheet${i + 1}.xml"))
+                zip.write(sheetXml(rows))
+                zip.closeEntry()
+            }
+        }
+    }
 
     private val ROOT_RELS: ByteArray =
         """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -36,17 +40,42 @@ object XlsxWriter {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>""".trimIndent().toByteArray(Charsets.UTF_8)
 
-    private val WORKBOOK_RELS: ByteArray =
-        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>""".trimIndent().toByteArray(Charsets.UTF_8)
+    private fun contentTypes(count: Int): ByteArray {
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>""")
+        (1..count).forEach { i ->
+            sb.append("\n  <Override PartName=\"/xl/worksheets/sheet$i.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>")
+        }
+        sb.append("\n</Types>")
+        return sb.toString().trimIndent().toByteArray(Charsets.UTF_8)
+    }
 
-    private fun workbookXml(sheetName: String): ByteArray =
-        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="${esc(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
-</workbook>""".trimIndent().toByteArray(Charsets.UTF_8)
+    private fun workbookXml(sheets: List<Pair<String, List<List<String>>>>): ByteArray {
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">""")
+        sb.append("<sheets>")
+        sheets.forEachIndexed { i, (name, _) ->
+            sb.append("<sheet name=\"${esc(name)}\" sheetId=\"${i + 1}\" r:id=\"rId${i + 1}\"/>")
+        }
+        sb.append("</sheets></workbook>")
+        return sb.toString().trimIndent().toByteArray(Charsets.UTF_8)
+    }
+
+    private fun workbookRels(count: Int): ByteArray {
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""")
+        (1..count).forEach { i ->
+            sb.append("\n  <Relationship Id=\"rId$i\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet$i.xml\"/>")
+        }
+        sb.append("\n</Relationships>")
+        return sb.toString().trimIndent().toByteArray(Charsets.UTF_8)
+    }
 
     private fun sheetXml(rows: List<List<String>>): ByteArray {
         val sb = StringBuilder(rows.size * 64)

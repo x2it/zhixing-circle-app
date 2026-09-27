@@ -3,14 +3,24 @@
 import android.content.ContentProviderOperation
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.provider.ContactsContract
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.realtor.geeksales.data.db.Customer
+import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.db.IntentLevel
 import com.realtor.geeksales.data.importexport.CsvManager
 import com.realtor.geeksales.data.importexport.ExcelManager
 import com.realtor.geeksales.data.importexport.ImportReport
+import com.realtor.geeksales.data.importexport.SmsExporter
+import com.realtor.geeksales.data.importexport.SnapshotManager
+import com.realtor.geeksales.data.remote.ApiKeyStore
+import com.realtor.geeksales.data.remote.WbContact
+import com.realtor.geeksales.data.remote.WbResult
+import com.realtor.geeksales.data.remote.WorkbuddyApi
+import com.realtor.geeksales.data.remote.WbMessage
 import com.realtor.geeksales.data.repo.CustomerRepository
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,20 +30,46 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 data class IOStatus(
     val running: Boolean = false,
     val message: String = "",
     val report: ImportReport? = null,
-    val exportCount: Int? = null
+    val exportCount: Int? = null,
+    /** 最近一次同步的明细（知行朋友圈） */
+    val syncSummary: String? = null
 )
+
+/** 知行同步结果汇总 */
+data class WbSyncReport(
+    val imported: Int = 0,
+    val skippedDup: Int = 0,
+    val created: Int = 0,
+    val updated: Int = 0,
+    val failed: Int = 0,
+    val backupFile: String? = null
+)
+
+/** 同步冲突策略（用户可选） */
+enum class SyncMode(val label: String, val desc: String) {
+    SMART("智能合并", "两端改动都保留，同一字段冲突时以本地最新为准"),
+    CLOUD_FIRST("云端优先", "冲突以线上数据为准，覆盖本地"),
+    LOCAL_FIRST("本地优先", "冲突以本地数据为准，覆盖线上")
+}
 
 @HiltViewModel
 class ImportExportViewModel @Inject constructor(
     private val csv: CsvManager,
     private val excel: ExcelManager,
+    private val smsExporter: SmsExporter,
+    private val snapshot: SnapshotManager,
     private val repo: CustomerRepository,
+    private val wbApi: WorkbuddyApi,
+    private val apiKeyStore: ApiKeyStore,
     @ApplicationContext private val ctx: Context
 ) : ViewModel() {
 
@@ -385,6 +421,592 @@ class ImportExportViewModel @Inject constructor(
             repo.deleteAll()
             _status.value = IOStatus(message = "已清空 $n 条客户数据")
         }
+    }
+
+    // ================= 知行朋友圈（第三方通讯录）双向同步 =================
+    // 设计原则：
+    //  1) 每次同步前自动全量备份本地客户到「下载/TMA备份」目录（XLSX），防误覆盖；
+    //  2) 导入按号码查重，默认跳过已存在客户，绝不覆盖本地；
+    //  3) 导出按号码匹配线上联系人：存在则更新、不存在则新建，绝不删除；
+    //  4) 云端 = 异地备份：换机后配好 API Key 即可一键拉回全部客户与跟进历史。
+
+    /** API Key 配置 */
+    fun hasApiKey(): Boolean = !apiKeyStore.load().isNullOrBlank()
+    fun saveApiKey(key: String): Boolean = apiKeyStore.save(key.trim())
+    fun clearApiKey() = apiKeyStore.clear()
+
+    // ---- 同步模式（prefs 持久化）----
+    private val prefs = ctx.getSharedPreferences("tma_prefs", Context.MODE_PRIVATE)
+
+    fun syncMode(): SyncMode = runCatching {
+        SyncMode.valueOf(prefs.getString("wb_sync_mode", SyncMode.SMART.name) ?: SyncMode.SMART.name)
+    }.getOrDefault(SyncMode.SMART)
+
+    fun setSyncMode(mode: SyncMode) = prefs.edit().putString("wb_sync_mode", mode.name).apply()
+
+    // ---- 服务器地址（平台迁移时切换，不写死）----
+    fun baseUrl(): String = wbApi.baseUrl()
+    fun setBaseUrl(url: String) = wbApi.setBaseUrl(url)
+
+    /** 自动备份：全字段 XLSX 写入系统下载目录（MediaStore），返回文件名 */
+    suspend fun backupToDownloads(): String? = withContext(Dispatchers.IO) {
+        val all = repo.getAll()
+        if (all.isEmpty()) return@withContext null
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
+        val display = "TMA备份-${stamp}.xlsx"
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, display)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/TMA备份")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val resolver = ctx.contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: return@withContext null
+        runCatching {
+            resolver.openOutputStream(uri)?.use { excel.exportToStream(all, it) }
+        }.onFailure {
+            resolver.delete(uri, null, null)
+            return@withContext null
+        }
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        display
+    }
+
+    /** 从知行朋友圈导入：联系人 + 标签 + 跟进历史（默认跳过重复，不覆盖本地） */
+    fun importFromWorkbuddy() = doRun("知行同步：备份中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先在「数据」页配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 1) 先备份本地
+            val backup = backupToDownloads()
+            _status.value = IOStatus(running = true, message = "知行同步：拉取联系人…")
+            // 2) 拉取线上联系人
+            val contacts = when (val r = wbApi.fetchAllContacts()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "知行同步失败：${r.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> r.data
+            }
+            // 3) 按同步模式查重处理
+            val mode = syncMode()
+            var imported = 0
+            var skipped = 0
+            var conflicts = 0
+            var overridden = 0
+            val newIds = mutableListOf<Long>()
+            contacts.forEach { wb ->
+                val phoneN = Formatter.normalizePhone(wb.phone)
+                if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) return@forEach
+                val existing = repo.getByPhoneNormalized(phoneN)
+                if (existing != null) {
+                    when (mode) {
+                        // 本地优先：本地为准，跳过
+                        SyncMode.LOCAL_FIRST -> skipped++
+                        // 云端优先：线上覆盖本地（字段 + 标签 + 线上 id）
+                        SyncMode.CLOUD_FIRST -> {
+                            overridden++
+                            val merged = wbToCustomer(wb, phoneN).copy(id = existing.id, createdAt = existing.createdAt)
+                            repo.upsertAndGetId(merged)
+                            if (wb.id.isNotBlank()) repo.updateWbContactId(existing.id, wb.id)
+                            val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
+                            if (tagNames.isNotEmpty()) {
+                                repo.tagsOf(existing.id).filter { it !in tagNames }
+                                    .forEach { stale -> repo.removeTag(existing.id, stale) }
+                                repo.applyTags(existing.id, tagNames)
+                            }
+                        }
+                        // 智能合并：字段级补空，冲突保留本地
+                        SyncMode.SMART -> {
+                            val merged = mergeWbIntoLocal(existing, wb)
+                            if (merged != existing) {
+                                repo.upsertAndGetId(merged)
+                                if (wb.id.isNotBlank() && existing.wbContactId.isNullOrBlank()) {
+                                    repo.updateWbContactId(existing.id, wb.id)
+                                }
+                            }
+                            val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
+                            if (tagNames.isNotEmpty()) repo.applyTags(existing.id, tagNames)
+                            if (hasFieldConflict(existing, wb)) conflicts++
+                        }
+                    }
+                    return@forEach
+                }
+                val c = wbToCustomer(wb, phoneN)
+                val id = repo.upsertAndGetId(c)
+                if (id > 0) {
+                    imported++
+                    newIds.add(id)
+                    if (wb.id.isNotBlank()) repo.updateWbContactId(id, wb.id)
+                    val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
+                    if (tagNames.isNotEmpty()) repo.applyTags(id, tagNames)
+                }
+            }
+            // 4) 拉取线上跟进历史并导入（按 contactId → 本地 wbContactId 匹配，去重）
+            var followupsImported = 0
+            when (val fr = wbApi.fetchAllFollowups()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(
+                        message = "联系人已同步，跟进历史失败：${fr.message}",
+                        syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，备份：$backup"
+                    )
+                    return@withContext
+                }
+                is WbResult.Success -> {
+                    followupsImported = importRemoteFollowups(fr.data)
+                }
+            }
+            _status.value = IOStatus(
+                message = "知行同步完成",
+                syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，跟进记录 $followupsImported 条，备份：$backup"
+            )
+        }
+    }
+
+    /** 导出到知行朋友圈：联系人 + 标签 + 跟进历史（存在更新、不存在新建，不删远端） */
+    fun exportToWorkbuddy() = doRun("知行同步：备份中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先在「数据」页配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 1) 先备份本地
+            val backup = backupToDownloads()
+            _status.value = IOStatus(running = true, message = "知行同步：拉取线上数据…")
+            // 2) 拉取线上联系人（phone → id 索引）与标签（name → id 索引）
+            val remoteByPhone = HashMap<String, WbContact>()
+            when (val r = wbApi.fetchAllContacts()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "知行同步失败：${r.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> r.data.forEach {
+                    val n = Formatter.normalizePhone(it.phone)
+                    if (n.isNotBlank()) remoteByPhone[n] = it
+                }
+            }
+            val tagIdByName = HashMap<String, String>()
+            when (val r = wbApi.fetchAllTags()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "知行同步失败：${r.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> r.data.forEach { t ->
+                    if (t.id.isNotBlank() && t.name.isNotBlank()) tagIdByName[t.name] = t.id
+                }
+            }
+            // 3) 按同步模式导出联系人
+            val mode = syncMode()
+            var created = 0
+            var updated = 0
+            var skipped = 0
+            var failed = 0
+            var noPhone = 0
+            val localAll = repo.getAll()
+            localAll.forEach { c ->
+                val phoneN = c.phoneNormalized
+                if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) {
+                    noPhone++
+                    return@forEach
+                }
+                val tagIds = repo.tagsOf(c.id).mapNotNull { tagIdByName[it] }
+                val wb = customerToWb(c, tagIds)
+                val remote = remoteByPhone[phoneN]
+                try {
+                    when {
+                        remote != null -> {
+                            when (mode) {
+                                // 云端优先：线上为准，本地改动不覆盖线上
+                                SyncMode.CLOUD_FIRST -> skipped++
+                                // 本地优先 / 智能合并：本地为准推送更新
+                                else -> {
+                                    if (wbApi.updateContact(remote.id, wb) is WbResult.Success) {
+                                        updated++
+                                        if (c.wbContactId.isNullOrBlank() || c.wbContactId != remote.id) {
+                                            repo.updateWbContactId(c.id, remote.id)
+                                        }
+                                    } else failed++
+                                }
+                            }
+                        }
+                        else -> {
+                            when (val r = wbApi.createContact(wb)) {
+                                is WbResult.Success -> {
+                                    created++
+                                    repo.updateWbContactId(c.id, r.data)
+                                }
+                                is WbResult.Error -> failed++
+                            }
+                        }
+                    }
+                } catch (t: Exception) {
+                    failed++
+                }
+            }
+            // 4) 推送跟进历史（通话登记），按线上 followups 去重
+            var pushed = 0
+            var fuFailed = 0
+            val remoteFus = when (val fr = wbApi.fetchAllFollowups()) {
+                is WbResult.Success -> fr.data
+                else -> emptyList()
+            }
+            val remoteFuKeys = HashSet<String>()
+            remoteFus.forEach { f ->
+                remoteFuKeys.add("${f.contactId}|${f.content}|${f.followupDate}")
+            }
+            val customerById = HashMap<Long, Customer>()
+            localAll.forEach { c -> customerById[c.id] = c }
+            repo.allFollowUps().forEach { fu ->
+                val owner = customerById[fu.customerId]?.wbContactId ?: return@forEach
+                val content = followupContent(fu)
+                val date = Formatter.epochToDay(fu.createdAt) ?: return@forEach
+                val key = "$owner|$content|$date"
+                if (key in remoteFuKeys) return@forEach
+                val wbFu = com.realtor.geeksales.data.remote.WbFollowup(
+                    contactId = owner,
+                    content = content,
+                    followupType = "phone",
+                    followupDate = date,
+                    nextFollowupDate = Formatter.epochToDay(fu.remindAt)
+                )
+                when (wbApi.createFollowup(wbFu)) {
+                    is WbResult.Success -> { pushed++; remoteFuKeys.add(key) }
+                    is WbResult.Error -> fuFailed++
+                }
+            }
+            _status.value = IOStatus(
+                message = "知行同步完成",
+                syncSummary = "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone），跟进记录推送 $pushed 条，备份：$backup"
+            )
+        }
+    }
+
+    /** 线上跟进记录 → 本地（按 wbContactId 匹配客户 + 去重） */
+    private suspend fun importRemoteFollowups(remote: List<com.realtor.geeksales.data.remote.WbFollowup>): Int {        var count = 0
+        // 建 wbContactId → 本地客户映射
+        val byWbId = HashMap<String, Customer>()
+        repo.getAll().forEach { c -> if (!c.wbContactId.isNullOrBlank()) byWbId[c.wbContactId] = c }
+        remote.forEach { f ->
+            if (f.contactId.isBlank() || f.content.isBlank()) return@forEach
+            val local = byWbId[f.contactId] ?: return@forEach
+            val createdAt = Formatter.dayToEpoch(f.followupDate) ?: return@forEach
+            // 去重：同客户 + 同备注 + 同时间
+            if (repo.findFollowUpDedup(local.id, f.content, createdAt) != null) return@forEach
+            repo.insertFollowUps(
+                listOf(
+                    com.realtor.geeksales.data.db.FollowUp(
+                        customerId = local.id,
+                        result = FollowResult.PENDING,
+                        durationSec = 0,
+                        note = f.content,
+                        remindAt = Formatter.dayToEpoch(f.nextFollowupDate),
+                        fromPostCall = false,
+                        createdAt = createdAt
+                    )
+                )
+            )
+            count++
+        }
+        return count
+    }
+
+    // ================= 时光机（快照 + 恢复） =================
+    // 快照 = 全量多表 XLSX（客户/跟进/标签/短信）→ 下载/TMA备份
+    // 恢复 = 覆盖式重建：先自动快照当前状态（双保险），再清空本地并按快照重建
+
+    /** 手动快照 */
+    fun snapshotNow() = doRun("时光机快照中…") {
+        withContext(Dispatchers.IO) {
+            val file = snapshot.snapshotToDownloads()
+            _status.value = if (file != null) {
+                IOStatus(message = "快照完成：$file（下载/TMA备份）")
+            } else {
+                IOStatus(message = "没有可快照的数据")
+            }
+        }
+    }
+
+    /** 从备份文件恢复（覆盖模式） */
+    fun restoreFrom(uri: Uri) = doRun("时光机恢复中…") {
+        withContext(Dispatchers.IO) {
+            // 双保险：先快照当前状态
+            val safety = snapshot.snapshotToDownloads()
+            val err = snapshot.restoreFrom(uri)
+            _status.value = if (err == null) {
+                IOStatus(
+                    message = "恢复完成",
+                    syncSummary = "恢复前已自动备份当前状态${if (safety != null) "（$safety）" else "（当前无数据）"}"
+                )
+            } else {
+                IOStatus(message = "恢复失败：$err")
+            }
+        }
+    }
+
+    // ================= 短信备份与同步 =================
+    // 本地：增量备份 CSV 到下载目录；云端：双向同步到知行朋友圈 /api/messages。
+    // 隐私：短信为最敏感数据，默认本地备份；上云仅在用户主动点击「同步」时执行。
+
+    /** 本地增量备份短信（CSV 到 Downloads/TMA备份），需 READ_SMS 权限 */
+    fun backupSms() = doRun("短信备份中…") {
+        withContext(Dispatchers.IO) {
+            val r = smsExporter.backupToDownloads()
+            if (r.error != null) {
+                _status.value = IOStatus(message = "短信备份失败：${r.error}")
+            } else if (r.exported == 0) {
+                _status.value = IOStatus(message = "没有新增短信需要备份")
+            } else {
+                _status.value = IOStatus(
+                    message = "短信备份完成：${r.exported} 条（关联客户 ${r.matched} 位）",
+                    exportCount = r.exported
+                )
+            }
+        }
+    }
+
+    /** 短信同步到知行朋友圈（本地系统短信增量推送，需 READ_SMS） */
+    fun exportSmsToWorkbuddy() = doRun("短信同步到云端中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 先检查线上短信同步开关（关闭时 messages 接口 403）
+            when (val sw = wbApi.smsSyncEnabled()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "无法读取短信开关：${sw.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> if (!sw.data) {
+                    _status.value = IOStatus(message = "知行朋友圈短信同步开关未开启，请在网页「API 接入」页打开后再试")
+                    return@withContext
+                }
+            }
+            val prefs = ctx.getSharedPreferences("tma_prefs", Context.MODE_PRIVATE)
+            val cursor = prefs.getLong("sms_sync_last_id", 0L)
+            // 远端消息 key 集合（phone|body|messageDate），避免重复推送
+            val remoteKeys = HashSet<String>()
+            when (val r = wbApi.fetchAllMessages()) {
+                is WbResult.Success -> r.data.forEach {
+                    remoteKeys.add("${it.phone}|${it.body}|${it.messageDate}")
+                }
+                is WbResult.Error -> {
+                    // 线上接口未开放时给出明确指引
+                    _status.value = IOStatus(message = "云端短信接口不可用：${r.message}")
+                    return@withContext
+                }
+            }
+            // 本地客户映射（号码 → wbContactId）
+            val wbIdByPhone = HashMap<String, String>()
+            repo.getAll().forEach { c ->
+                if (!c.wbContactId.isNullOrBlank()) wbIdByPhone[c.phoneNormalized] = c.wbContactId
+            }
+            val sdfMin = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+            val smsUri = android.net.Uri.parse("content://sms")
+            val projection = arrayOf("_id", "address", "body", "date", "type")
+            val selection = if (cursor > 0) "_id > ?" else null
+            val args = if (selection != null) arrayOf(cursor.toString()) else null
+            var pushed = 0
+            var failed = 0
+            var maxId = cursor
+            runCatching {
+                ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
+                    val idI = c.getColumnIndexOrThrow("_id")
+                    val addrI = c.getColumnIndexOrThrow("address")
+                    val bodyI = c.getColumnIndexOrThrow("body")
+                    val dateI = c.getColumnIndexOrThrow("date")
+                    val typeI = c.getColumnIndexOrThrow("type")
+                    while (c.moveToNext()) {
+                        val id = c.getLong(idI)
+                        val phone = c.getString(addrI).orEmpty().trim()
+                        val body = c.getString(bodyI).orEmpty()
+                        val dateMs = c.getLong(dateI)
+                        val type = c.getInt(typeI)
+                        maxId = maxOf(maxId, id)
+                        if (phone.isBlank() || body.isBlank()) continue
+                        val dateLabel = runCatching { sdfMin.format(Date(dateMs)) }.getOrNull()
+                        if (dateLabel == null) continue
+                        val key = "$phone|$body|$dateLabel"
+                        if (key in remoteKeys) continue
+                        val m = WbMessage(
+                            contactId = wbIdByPhone[Formatter.normalizePhone(phone)],
+                            phone = phone,
+                            body = body,
+                            direction = if (type == 1) "in" else "out",
+                            messageDate = dateLabel
+                        )
+                        when (wbApi.createMessage(m)) {
+                            is WbResult.Success -> { pushed++; remoteKeys.add(key) }
+                            is WbResult.Error -> failed++
+                        }
+                        if ((pushed + failed) % 100 == 0) kotlinx.coroutines.yield()
+                    }
+                }
+            }.onFailure { t ->
+                _status.value = IOStatus(message = "读取短信失败：${t.message ?: t.javaClass.simpleName}")
+                return@withContext
+            }
+            prefs.edit().putLong("sms_sync_last_id", maxId).apply()
+            _status.value = IOStatus(
+                message = "短信云端同步完成：推送 ${pushed} 条（失败 $failed）",
+                syncSummary = "失败原因多为线上接口未开放或限流；本地数据未受影响"
+            )
+        }
+    }
+
+    /** 从知行朋友圈拉取短信到本地（存 sms_messages 表，供客户时间线展示） */
+    fun importSmsFromWorkbuddy() = doRun("拉取云端短信中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 先检查线上短信同步开关（关闭时 messages 接口 403）
+            when (val sw = wbApi.smsSyncEnabled()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "无法读取短信开关：${sw.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> if (!sw.data) {
+                    _status.value = IOStatus(message = "知行朋友圈短信同步开关未开启，请在网页「API 接入」页打开后再试")
+                    return@withContext
+                }
+            }
+            val messages = when (val r = wbApi.fetchAllMessages()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "云端短信接口不可用：${r.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> r.data
+            }
+            if (messages.isEmpty()) {
+                _status.value = IOStatus(message = "云端没有短信记录")
+                return@withContext
+            }
+            // 客户映射：优先 wbContactId，其次号码
+            val customerByWbId = HashMap<String, Customer>()
+            val customerByPhone = HashMap<String, Customer>()
+            repo.getAll().forEach { c ->
+                if (!c.wbContactId.isNullOrBlank()) customerByWbId[c.wbContactId] = c
+                if (c.phoneNormalized.isNotBlank()) customerByPhone[c.phoneNormalized] = c
+            }
+            var imported = 0
+            var skipped = 0
+            val toInsert = mutableListOf<com.realtor.geeksales.data.db.SmsMessage>()
+            messages.forEach { m ->
+                if (m.id.isBlank()) return@forEach
+                if (repo.smsByWbId(m.id) != null) { skipped++; return@forEach }
+                val local = m.contactId?.let { customerByWbId[it] }
+                    ?: customerByPhone[Formatter.normalizePhone(m.phone)]
+                toInsert.add(
+                    com.realtor.geeksales.data.db.SmsMessage(
+                        customerId = local?.id ?: 0L,
+                        phone = m.phone,
+                        body = m.body,
+                        direction = m.direction,
+                        messageDate = Formatter.dayToEpoch(m.messageDate?.take(10))
+                            ?: System.currentTimeMillis(),
+                        wbMessageId = m.id
+                    )
+                )
+                imported++
+                if (imported % 500 == 0) kotlinx.coroutines.yield()
+            }
+            if (toInsert.isNotEmpty()) repo.insertSms(toInsert)
+            _status.value = IOStatus(
+                message = "云端短信拉取完成：$imported 条（跳过重复 $skipped）",
+                syncSummary = "已存入本地短信表，可在客户详情页查看"
+            )
+        }
+    }
+
+    // ---- 字段映射（以线上为准）----
+    /** 智能合并：本地空字段 ← 线上非空；冲突保留本地并计数 */
+    private fun mergeWbIntoLocal(local: Customer, wb: com.realtor.geeksales.data.remote.WbContact): Customer {
+        fun <T : CharSequence> pick(l: T?, r: T?): T? = if (!l.isNullOrBlank()) l else r
+        return local.copy(
+            wechat = pick(local.wechat, wb.wechat),
+            source = pick(local.source, wb.source),
+            note = pick(local.note, wb.memo),
+            nickname = pick(local.nickname, wb.nickname),
+            nextFollowAt = local.nextFollowAt ?: Formatter.dayToEpoch(wb.nextFollowupDate),
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    /** 是否存在字段冲突（智能合并报告中提示） */
+    private fun hasFieldConflict(local: Customer, wb: com.realtor.geeksales.data.remote.WbContact): Boolean {
+        fun diff(l: String?, r: String?): Boolean =
+            !l.isNullOrBlank() && !r.isNullOrBlank() && l != r
+        return diff(local.wechat, wb.wechat) || diff(local.note, wb.memo) || diff(local.nickname, wb.nickname)
+    }
+
+    /** 线上 tier S/A/B/C/D/V → 本地意向等级 */
+    private fun wbTierToLevel(tier: String?): IntentLevel = when (tier?.trim()?.uppercase()) {
+        "S", "A", "V" -> IntentLevel.A
+        "B" -> IntentLevel.B
+        "C" -> IntentLevel.C
+        "D" -> IntentLevel.D
+        else -> IntentLevel.U
+    }
+
+    private fun levelToWbTier(level: IntentLevel): String? = when (level) {
+        IntentLevel.A -> "A"
+        IntentLevel.B -> "B"
+        IntentLevel.C -> "C"
+        IntentLevel.D -> "D"
+        IntentLevel.U -> null
+    }
+
+    /** 线上联系人 → 本地客户 */
+    private fun wbToCustomer(wb: com.realtor.geeksales.data.remote.WbContact, phoneN: String): Customer =
+        Customer(
+            name = wb.name.ifBlank { "未命名" },
+            phone = wb.phone,
+            phoneNormalized = phoneN,
+            wechat = wb.wechat,
+            source = wb.source?.ifBlank { null } ?: "知行朋友圈",
+            intentLevel = wbTierToLevel(wb.tier),
+            note = wb.memo,
+            nextFollowAt = Formatter.dayToEpoch(wb.nextFollowupDate),
+            nickname = wb.nickname,
+            wbContactId = wb.id,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+
+    /** 本地客户 → 线上联系人（导出用） */
+    private fun customerToWb(c: Customer, tagIds: List<String>): com.realtor.geeksales.data.remote.WbContact =
+        com.realtor.geeksales.data.remote.WbContact(
+            name = c.name,
+            nickname = c.nickname,
+            phone = c.phone,
+            wechat = c.wechat,
+            tier = levelToWbTier(c.intentLevel),
+            source = c.source,
+            nextFollowupDate = Formatter.epochToDay(c.nextFollowAt),
+            memo = c.note,
+            tagIds = tagIds
+        )
+
+    /** 本地跟进记录 → 线上 content 文本（含结果标签，便于回读） */
+    private fun followupContent(fu: com.realtor.geeksales.data.db.FollowUp): String {
+        val label = when (fu.result) {
+            FollowResult.CONNECTED -> "接通"
+            FollowResult.NOT_INTERESTED -> "不感兴趣"
+            FollowResult.NOT_REACHED -> "未接通"
+            FollowResult.WRONG_NUMBER -> "错号"
+            FollowResult.SHUTDOWN -> "停机"
+            FollowResult.APPOINTMENT -> "预约"
+            FollowResult.PENDING -> "待跟进"
+        }
+        val note = fu.note?.trim().orEmpty()
+        return if (note.isNotEmpty()) "[$label] $note" else "[$label]"
     }
 
     private fun doRun(progressMsg: String, block: suspend () -> Unit) {

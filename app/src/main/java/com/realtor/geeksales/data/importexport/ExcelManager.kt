@@ -108,6 +108,24 @@ class ExcelManager @Inject constructor(
 
     suspend fun exportTo(uri: Uri): Int = withContext(Dispatchers.IO) {
         val all = repo.getAll()
+        val rows = rowsForSnapshot(all)
+        val os = ctx.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("无法写入文件，请检查存储权限")
+        os.use { XlsxWriter.write(it, "客户", rows) }
+        all.size
+    }
+
+    /** 流式全量导出（知行同步前自动备份用） */
+    suspend fun exportToStream(customers: List<Customer>, os: java.io.OutputStream): Int =
+        withContext(Dispatchers.IO) {
+            val rows = rowsForSnapshot(customers)
+            os.use { XlsxWriter.write(it, "客户", rows) }
+            customers.size
+        }
+
+    /** 客户全字段行（时光机快照与导出共用） */
+    fun rowsForSnapshot(all: List<Customer>): List<List<String>> = buildRows(all)
+
+    private fun buildRows(all: List<Customer>): List<List<String>> {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
         val rows = ArrayList<List<String>>(all.size + 1)
         rows.add(HEADERS.toList())
@@ -125,9 +143,7 @@ class ExcelManager @Inject constructor(
                 )
             )
         }
-        val os = ctx.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("无法写入文件，请检查存储权限")
-        os.use { XlsxWriter.write(it, "客户", rows) }
-        all.size
+        return rows
     }
 
     suspend fun templateTo(uri: Uri): Unit = withContext(Dispatchers.IO) {

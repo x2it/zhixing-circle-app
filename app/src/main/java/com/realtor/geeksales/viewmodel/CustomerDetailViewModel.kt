@@ -42,6 +42,12 @@ class CustomerDetailViewModel @Inject constructor(
         if (id == 0L) flowOf(emptyList()) else repo.observeFollowUpsOf(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** 客户短信记录（知行朋友圈同步来的云端短信） */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val smsMessages = idFlow.flatMapLatest { id ->
+        if (id == 0L) flowOf(emptyList()) else repo.observeSmsOf(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     fun dial(direct: Boolean = false) = viewModelScope.launch {
         runCatching {
             val c = customer.value ?: return@launch

@@ -2,10 +2,11 @@ package com.realtor.geeksales.ui.screen
 
 import android.Manifest
 import android.net.Uri
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,12 +45,17 @@ import com.realtor.geeksales.ui.components.LoadingState
 import com.realtor.geeksales.ui.components.GlobalToast
 import com.realtor.geeksales.ui.theme.Accent
 import com.realtor.geeksales.ui.theme.Bg
+import com.realtor.geeksales.ui.theme.BgElev
+import com.realtor.geeksales.ui.theme.BgElev2
 import com.realtor.geeksales.ui.theme.Danger
+import com.realtor.geeksales.ui.theme.Divider
 import com.realtor.geeksales.ui.theme.Success
 import com.realtor.geeksales.ui.theme.TextMuted
 import com.realtor.geeksales.ui.theme.TextPrimary
+import com.realtor.geeksales.ui.theme.TextSecondary
 import com.realtor.geeksales.ui.theme.Warning
 import com.realtor.geeksales.viewmodel.ImportExportViewModel
+import com.realtor.geeksales.viewmodel.SyncMode
 
 @Composable
 fun ImportExportScreen(
@@ -54,9 +63,8 @@ fun ImportExportScreen(
     vm: ImportExportViewModel = hiltViewModel()
 ) {
     val status by vm.status.collectAsStateWithLifecycle()
-    // 记录已提示过的消息，避免历史成功/失败消息在每次进入页面时重复弹 Toast
     var lastNotified by remember { mutableStateOf("") }
-    androidx.compose.runtime.LaunchedEffect(status) {
+    LaunchedEffect(status) {
         val m = status.message
         if (m.isNotEmpty() && m != lastNotified) {
             when {
@@ -66,6 +74,13 @@ fun ImportExportScreen(
         }
     }
     var exportPending by remember { mutableStateOf(false) }
+
+    // API Key 输入状态
+    var apiKeyInput by remember { mutableStateOf("") }
+    var keyVisible by remember { mutableStateOf(false) }
+    val hasKey by remember { mutableStateOf(vm.hasApiKey()) }
+    var mode by remember { mutableStateOf(vm.syncMode()) }
+    var baseUrlInput by remember { mutableStateOf(vm.baseUrl()) }
 
     val pickCsv = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u: Uri? ->
         if (u != null) vm.importCsv(u)
@@ -82,16 +97,36 @@ fun ImportExportScreen(
     val createTemplate = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { u: Uri? ->
         if (u != null) vm.templateXlsx(u)
     }
+    // 时光机恢复文件选择
+    val pickRestore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u: Uri? ->
+        if (u != null) vm.restoreFrom(u)
+    }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            if (exportPending) vm.exportContacts() else vm.importContacts()
+            when {
+                exportPending -> vm.exportContacts()
+                else -> vm.importContacts()
+            }
+        }
+    }
+    // 短信动作标记（备份=1 / 同步云端=2），权限授权后执行对应动作
+    var smsAction by remember { mutableStateOf(0) }
+    // 短信权限（备份 / 云端同步）
+    val smsPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            when {
+                smsAction == 1 -> vm.backupSms()
+                smsAction == 2 -> vm.exportSmsToWorkbuddy()
+            }
         }
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        GeekTopBar(title = "数据", subtitle = "导入 · 导出 · 模板", onBack = onBack)
+        GeekTopBar(title = "数据", subtitle = "导入 · 导出 · 知行同步 · 时光机", onBack = onBack)
         Column(
             Modifier
                 .fillMaxSize()
@@ -105,86 +140,227 @@ fun ImportExportScreen(
                     LoadingState(message = status.message)
                 }
             }
-            // 操作进行中：其余区域整体不可点（防狂点导致并发导入/锁竞争）
             val busy = status.running
 
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("导入数据", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekPrimaryButton("导入 CSV", { if (!busy) pickCsv.launch(arrayOf("text/*", "text/csv", "application/csv")) }, Modifier.weight(1f), enabled = !busy)
-                        GeekPrimaryButton("导入 XLSX", { if (!busy) pickXlsx.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel")) }, Modifier.weight(1f), enabled = !busy)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekGhostButton(if (busy) "处理中…" else "从通讯录导入", color = if (busy) TextMuted else Accent, onClick = {
-                            if (busy) return@GeekGhostButton
-                            exportPending = false
-                            permLauncher.launch(Manifest.permission.READ_CONTACTS)
-                        })
-                    }
-                }
-            }
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("导出与模板", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekGhostButton("导出 CSV", color = if (busy) TextMuted else Success, onClick = { if (!busy) createCsv.launch("tma_customers.csv") })
-                        GeekGhostButton("导出 XLSX", color = if (busy) TextMuted else Success, onClick = { if (!busy) createXlsx.launch("tma_customers.xlsx") })
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekGhostButton(if (busy) "处理中…" else "导出到通讯录", color = if (busy) TextMuted else Accent, onClick = {
-                            if (busy) return@GeekGhostButton
-                            exportPending = true
-                            permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
-                        })
-                        GeekGhostButton("下载导入模板", color = if (busy) TextMuted else Warning, onClick = { if (!busy) createTemplate.launch("tma_template.xlsx") })
-                    }
-                }
-            }
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("执行状态", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    val c = when {
-                        status.running -> Warning
-                        status.message.startsWith("失败") -> Danger
-                        else -> Success
-                    }
-                    if (status.message.isNotEmpty()) {
-                        Text(status.message, color = c, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    status.report?.let { r ->
-                        if (r.error == null) {
-                            Spacer(Modifier.height(4.dp))
-                            Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                            Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
-                            Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
-                            Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    status.exportCount?.let { n ->
-                        Spacer(Modifier.height(4.dp))
-                        Text("已导出：$n 条", color = Success, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("危险操作", color = Danger, style = MaterialTheme.typography.labelMedium)
-                    Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                    GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) vm.clearAll() })
-                }
-            }
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("字段说明", color = TextMuted, style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "列顺序(CSV/XLSX)：姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、预算下限(万)、预算上限(万)、房型、意向楼盘、意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)、邮箱、公司、职位、地址、昵称、网站、生日(YYYY-MM-DD)、即时消息。扩展列可选，第一行为表头(中文)。重复手机号自动去重。",
-                        color = TextPrimary, style = MaterialTheme.typography.bodyMedium
+            // ================= 知行朋友圈 · 云端同步 =================
+            SectionCard("知行朋友圈 · 云端同步", "联系人 / 跟进 / 短信 双向同步 · 自动备份") {
+                // 服务器地址（可切换，平台迁移/关停时更换）
+                Text("服务器地址（平台迁移时可更换）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = baseUrlInput,
+                        onValueChange = { baseUrlInput = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text(com.realtor.geeksales.data.remote.WorkbuddyApi.DEFAULT_BASE_URL, color = TextMuted, style = MaterialTheme.typography.bodyMedium) },
+                        singleLine = true,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent, unfocusedBorderColor = Divider,
+                            focusedContainerColor = BgElev2, unfocusedContainerColor = BgElev,
+                            cursorColor = Accent,
+                            unfocusedTextColor = TextPrimary, focusedTextColor = TextPrimary,
+                            unfocusedLabelColor = TextSecondary, focusedLabelColor = Accent
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium
                     )
+                    GeekGhostButton("保存", color = if (busy) TextMuted else Accent, onClick = {
+                        if (busy || baseUrlInput.isBlank()) return@GeekGhostButton
+                        vm.setBaseUrl(baseUrlInput)
+                        GlobalToast.showSuccess("服务器地址已更新")
+                    })
                 }
+                Spacer(Modifier.height(4.dp))
+                // API Key 配置
+                Text("API Key（在知行朋友圈「API 接入」页生成）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text(if (hasKey) "已配置（重新输入可覆盖）" else "zx_ 开头的 35 位密钥", color = TextMuted, style = MaterialTheme.typography.bodyMedium) },
+                        singleLine = true,
+                        visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent, unfocusedBorderColor = Divider,
+                            focusedContainerColor = BgElev2, unfocusedContainerColor = BgElev,
+                            cursorColor = Accent,
+                            unfocusedTextColor = TextPrimary, focusedTextColor = TextPrimary,
+                            unfocusedLabelColor = TextSecondary, focusedLabelColor = Accent
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium
+                    )
+                    GeekGhostButton(if (keyVisible) "隐藏" else "显示", onClick = { keyVisible = !keyVisible }, color = TextMuted)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekGhostButton("保存密钥", color = if (busy) TextMuted else Accent, onClick = {
+                        if (busy || apiKeyInput.isBlank()) return@GeekGhostButton
+                        val ok = vm.saveApiKey(apiKeyInput)
+                        if (ok) { GlobalToast.showSuccess("API Key 已保存（加密存储）"); apiKeyInput = "" } else GlobalToast.showError("密钥保存失败")
+                    })
+                    if (hasKey) {
+                        GeekGhostButton("清除密钥", color = if (busy) TextMuted else Danger, onClick = { if (!busy) { vm.clearApiKey(); GlobalToast.showSuccess("密钥已清除") } })
+                    }
+                }
+                // 同步模式
+                Spacer(Modifier.height(4.dp))
+                Text("同步冲突策略", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                SyncModeSelector(mode = mode, enabled = !busy, onSelect = { mode = it; vm.setSyncMode(it) })
+                Text(
+                    text = when (mode) {
+                        SyncMode.SMART -> "推荐：两端改动都保留，同一字段冲突时以本地最新为准；绝不删除任何一端数据。"
+                        SyncMode.CLOUD_FIRST -> "以知行朋友圈为准覆盖本地：适合把网站当主工作台、手机当客户端。"
+                        SyncMode.LOCAL_FIRST -> "以本地为准覆盖线上：适合本地深度操作、线上纯备份。"
+                    },
+                    color = TextSecondary, style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton(if (busy) "处理中…" else "备份并导入", { if (!busy) vm.importFromWorkbuddy() }, Modifier.weight(1f), enabled = !busy)
+                    GeekGhostButton(if (busy) "处理中…" else "备份并导出", color = if (busy) TextMuted else Success, onClick = { if (!busy) vm.exportToWorkbuddy() })
+                }
+                Text("每次同步前自动全量备份到「下载/TMA备份」；导入默认不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("⚠ API Key 关联你的知行朋友圈账号：一人一账号一密钥，请勿与他人共用，否则云端数据会混淆。", color = Warning, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // ================= 时光机 =================
+            SectionCard("时光机 · 数据回溯", "客户 / 跟进 / 标签 / 短信 全量快照与恢复") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton(if (busy) "处理中…" else "立即快照", { if (!busy) vm.snapshotNow() }, Modifier.weight(1f), enabled = !busy)
+                    GeekGhostButton(if (busy) "处理中…" else "从备份恢复", color = if (busy) TextMuted else Warning, onClick = { if (!busy) pickRestore.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "text/*")) })
+                }
+                Text("快照 = 含客户/跟进/标签/短信的完整 XLSX；恢复为覆盖模式，恢复前会自动再备份当前状态（双保险）。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // ================= 短信备份与同步 =================
+            SectionCard("短信备份与同步", "本地增量备份 · 云端双向同步（需 READ_SMS 权限）") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton(if (busy) "处理中…" else "备份短信(CSV)", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
+                    GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else Success, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
+                    Spacer(Modifier.weight(1f))
+                }
+                Text("短信为最敏感数据：默认仅本地增量备份（下载/TMA备份）；「同步到云端」仅在您主动点击时执行，需知行朋友圈已开放短信接口。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // ================= 导入数据 =================
+            SectionCard("导入数据", "CSV / XLSX / 系统通讯录") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton("导入 CSV", { if (!busy) pickCsv.launch(arrayOf("text/*", "text/csv", "application/csv")) }, Modifier.weight(1f), enabled = !busy)
+                    GeekPrimaryButton("导入 XLSX", { if (!busy) pickXlsx.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel")) }, Modifier.weight(1f), enabled = !busy)
+                }
+                GeekGhostButton(if (busy) "处理中…" else "从通讯录导入", color = if (busy) TextMuted else Accent, onClick = {
+                    if (busy) return@GeekGhostButton
+                    exportPending = false
+                    permLauncher.launch(Manifest.permission.READ_CONTACTS)
+                })
+            }
+
+            // ================= 导出与模板 =================
+            SectionCard("导出与模板", "CSV / XLSX / 系统通讯录 / 模板") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekGhostButton("导出 CSV", color = if (busy) TextMuted else Success, onClick = { if (!busy) createCsv.launch("tma_customers.csv") })
+                    GeekGhostButton("导出 XLSX", color = if (busy) TextMuted else Success, onClick = { if (!busy) createXlsx.launch("tma_customers.xlsx") })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekGhostButton(if (busy) "处理中…" else "导出到通讯录", color = if (busy) TextMuted else Accent, onClick = {
+                        if (busy) return@GeekGhostButton
+                        exportPending = true
+                        permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
+                    })
+                    GeekGhostButton("下载导入模板", color = if (busy) TextMuted else Warning, onClick = { if (!busy) createTemplate.launch("tma_template.xlsx") })
+                }
+            }
+
+            // ================= 执行状态 =================
+            SectionCard("执行状态", null) {
+                val c = when {
+                    status.running -> Warning
+                    status.message.startsWith("失败") -> Danger
+                    else -> Success
+                }
+                if (status.message.isNotEmpty()) {
+                    Text(status.message, color = c, style = MaterialTheme.typography.bodyMedium)
+                }
+                status.report?.let { r ->
+                    if (r.error == null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+                        Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
+                        Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
+                        Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                status.exportCount?.let { n ->
+                    Spacer(Modifier.height(4.dp))
+                    Text("已导出：$n 条", color = Success, style = MaterialTheme.typography.bodyMedium)
+                }
+                status.syncSummary?.let { s ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(s, color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+
+            // ================= 危险操作 =================
+            SectionCard("危险操作", null) {
+                Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) vm.clearAll() })
+            }
+
+            // ================= 字段说明 =================
+            SectionCard("字段说明", null) {
+                Text(
+                    "列顺序(CSV/XLSX)：姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、预算下限(万)、预算上限(万)、房型、意向楼盘、意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)、邮箱、公司、职位、地址、昵称、网站、生日(YYYY-MM-DD)、即时消息。扩展列可选，第一行为表头(中文)。重复手机号自动去重。",
+                    color = TextPrimary, style = MaterialTheme.typography.bodyMedium
+                )
             }
             Spacer(Modifier.height(80.dp))
+        }
+    }
+}
+
+/** 分区卡片：左侧强调条 + 标题 + 副标题，数据页统一视觉 */
+@Composable
+private fun SectionCard(title: String, subtitle: String?, content: @Composable () -> Unit) {
+    GeekCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(width = 3.dp, height = 14.dp).background(Accent))
+                Spacer(Modifier.padding(start = 6.dp))
+                Text(title, color = TextPrimary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp))
+            }
+            if (subtitle != null) {
+                Text(subtitle, color = TextMuted, style = MaterialTheme.typography.labelMedium)
+            }
+            content()
+        }
+    }
+}
+
+/** 同步模式三选一 */
+@Composable
+private fun SyncModeSelector(mode: SyncMode, enabled: Boolean, onSelect: (SyncMode) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SyncMode.entries.forEach { m ->
+            val selected = mode == m
+            val color = when (m) {
+                SyncMode.SMART -> Accent
+                SyncMode.CLOUD_FIRST -> Warning
+                SyncMode.LOCAL_FIRST -> Success
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (enabled) Modifier.clickable { onSelect(m) } else Modifier)
+                    .background(if (selected) color.copy(alpha = 0.14f) else BgElev2)
+                    .border(1.dp, if (selected) color else Divider)
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(m.label, color = if (selected) color else TextSecondary, style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace)
+            }
         }
     }
 }

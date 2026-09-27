@@ -18,9 +18,10 @@ class Converters {
         Customer::class,
         FollowUp::class,
         Tag::class,
-        CustomerTagMap::class
+        CustomerTagMap::class,
+        SmsMessage::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -28,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun customerDao(): CustomerDao
     abstract fun followUpDao(): FollowUpDao
     abstract fun tagDao(): TagDao
+    abstract fun smsDao(): SmsDao
 
     companion object {
         const val NAME = "geek_sales.db"
@@ -44,6 +46,30 @@ abstract class AppDatabase : RoomDatabase() {
                     db.execSQL("ALTER TABLE customers ADD COLUMN website TEXT")
                     db.execSQL("ALTER TABLE customers ADD COLUMN birthday TEXT")
                     db.execSQL("ALTER TABLE customers ADD COLUMN im TEXT")
+                }
+            },
+            // v2 → v3：知行朋友圈（线上）联系人 id，双向同步映射用
+            object : androidx.room.migration.Migration(2, 3) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE customers ADD COLUMN wbContactId TEXT")
+                }
+            },
+            // v3 → v4：短信记录表（知行朋友圈拉回的短信，供客户时间线展示）
+            object : androidx.room.migration.Migration(3, 4) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `sms_messages` (" +
+                            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                            "`customerId` INTEGER NOT NULL, " +
+                            "`phone` TEXT NOT NULL, " +
+                            "`body` TEXT NOT NULL, " +
+                            "`direction` TEXT NOT NULL, " +
+                            "`messageDate` INTEGER NOT NULL, " +
+                            "`wbMessageId` TEXT, " +
+                            "`createdAt` INTEGER NOT NULL)"
+                    )
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_messages_customerId` ON `sms_messages` (`customerId`)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_messages_messageDate` ON `sms_messages` (`messageDate`)")
                 }
             }
         )

@@ -8,6 +8,8 @@ import com.realtor.geeksales.data.db.FollowUpDao
 import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.db.IntentCount
 import com.realtor.geeksales.data.db.IntentLevel
+import com.realtor.geeksales.data.db.SmsDao
+import com.realtor.geeksales.data.db.SmsMessage
 import com.realtor.geeksales.data.db.Tag
 import com.realtor.geeksales.data.db.TagDao
 import com.realtor.geeksales.util.Formatter
@@ -19,7 +21,8 @@ import javax.inject.Singleton
 class CustomerRepository @Inject constructor(
     private val customerDao: CustomerDao,
     private val followUpDao: FollowUpDao,
-    private val tagDao: TagDao
+    private val tagDao: TagDao,
+    private val smsDao: SmsDao
 ) {
     fun observeFiltered(
         query: String?,
@@ -113,6 +116,13 @@ class CustomerRepository @Inject constructor(
         }
     }
 
+    /** 移除客户上的某个标签（云端优先模式下标签以线上为准） */
+    suspend fun removeTag(customerId: Long, tagName: String) {
+        if (customerId <= 0L) return
+        val tag = tagDao.getByName(tagName) ?: return
+        tagDao.deleteMap(customerId, tag.id)
+    }
+
     suspend fun deleteById(id: Long) = customerDao.deleteById(id)
 
     suspend fun countAll(): Int = customerDao.countAll()
@@ -154,6 +164,9 @@ class CustomerRepository @Inject constructor(
     suspend fun normalizeQueueOnLaunch() = customerDao.normalizeQueue()
 
     suspend fun upsertAll(list: List<Customer>) = customerDao.upsertAll(list)
+
+    /** 单条 upsert 并返回行 id（知行朋友圈导入用） */
+    suspend fun upsertAndGetId(c: Customer): Long = customerDao.upsert(c)
 
     suspend fun groupByIntent() = customerDao.groupByIntent()
 
@@ -204,6 +217,46 @@ class CustomerRepository @Inject constructor(
 
     suspend fun followUpsInRange(start: Long, end: Long) =
         followUpDao.getByRange(start, end)
+
+    // ---- 知行朋友圈同步辅助 ----
+    suspend fun allFollowUps(): List<FollowUp> = followUpDao.getAll()
+
+    /** 按 (customerId, note, createdAt) 查重，避免云端跟进记录重复导入 */
+    suspend fun findFollowUpDedup(customerId: Long, note: String?, createdAt: Long): FollowUp? =
+        followUpDao.findByDedupKey(customerId, note, createdAt)
+
+    suspend fun insertFollowUps(list: List<FollowUp>) = followUpDao.insertAll(list)
+
+    /** 写回知行朋友圈联系人 id（用于跟进历史推送映射） */
+    suspend fun updateWbContactId(customerId: Long, wbId: String) {
+        val c = customerDao.getById(customerId) ?: return
+        customerDao.upsert(c.copy(wbContactId = wbId, updatedAt = System.currentTimeMillis()))
+    }
+
+    // ---- 短信同步 ----
+    fun observeSmsOf(customerId: Long): Flow<List<SmsMessage>> = smsDao.observeByCustomer(customerId)
+
+    suspend fun smsByCustomer(customerId: Long): List<SmsMessage> = smsDao.getByCustomer(customerId)
+
+    suspend fun allSms(): List<SmsMessage> = smsDao.getAll()
+
+    suspend fun insertSms(messages: List<SmsMessage>) = smsDao.insertAll(messages)
+
+    suspend fun smsByWbId(wbId: String): SmsMessage? = smsDao.findByWbMessageId(wbId)
+
+    // ---- 时光机快照/恢复 ----
+    suspend fun allTags(): List<Tag> = tagDao.getAll()
+
+    suspend fun allTagMappings(): List<CustomerTagMap> = tagDao.getAllMappings()
+
+    /** 清空标签与映射（时光机恢复前） */
+    suspend fun clearAllTags() {
+        tagDao.clearMappings()
+        tagDao.clearAll()
+    }
+
+    /** 清空短信表（时光机恢复前） */
+    suspend fun clearAllSms() = smsDao.clearAll()
 }
 
 data class TodayStats(

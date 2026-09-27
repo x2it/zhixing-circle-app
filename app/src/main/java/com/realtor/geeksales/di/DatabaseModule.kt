@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.realtor.geeksales.data.db.AppDatabase
 import com.realtor.geeksales.data.db.CustomerDao
 import com.realtor.geeksales.data.db.FollowUpDao
+import com.realtor.geeksales.data.db.SmsDao
 import com.realtor.geeksales.data.db.TagDao
 import dagger.Module
 import dagger.Provides
@@ -27,4 +28,5 @@ object DatabaseModule {
     @Provides fun customerDao(db: AppDatabase): CustomerDao = db.customerDao()
     @Provides fun followUpDao(db: AppDatabase): FollowUpDao = db.followUpDao()
     @Provides fun tagDao(db: AppDatabase): TagDao = db.tagDao()
+    @Provides fun smsDao(db: AppDatabase): SmsDao = db.smsDao()
 }

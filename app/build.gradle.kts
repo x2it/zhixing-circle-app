@@ -14,8 +14,8 @@ android {
         applicationId = "com.realtor.geeksales"
         minSdk = 31
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.7.0"
+        versionCode = 21
+        versionName = "1.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -115,4 +115,7 @@ dependencies {
 
     implementation(libs.opencsv)
     implementation(libs.poi.ooxml)
+
+    // 知行朋友圈 API 同步（第三方通讯录）
+    implementation(libs.okhttp)
 }
