@@ -81,6 +81,13 @@ fun ImportExportScreen(
     val hasKey by remember { mutableStateOf(vm.hasApiKey()) }
     var mode by remember { mutableStateOf(vm.syncMode()) }
     var baseUrlInput by remember { mutableStateOf(vm.baseUrl()) }
+    // 自定义字段输入状态
+    var newFieldKey by remember { mutableStateOf("") }
+    var newFieldLabel by remember { mutableStateOf("") }
+    var newFieldType by remember { mutableStateOf("text") }
+    var newFieldOptions by remember { mutableStateOf("") }
+    var schemaVersion by remember { mutableStateOf(0) }
+    val schema = remember(schemaVersion) { vm.currentSchema() }
 
     val pickCsv = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u: Uri? ->
         if (u != null) vm.importCsv(u)
@@ -221,6 +228,103 @@ fun ImportExportScreen(
                 }
                 Text("每次同步前自动全量备份到「下载/TMA备份」；导入默认不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                 Text("⚠ API Key 关联你的知行朋友圈账号：一人一账号一密钥，请勿与他人共用，否则云端数据会混淆。", color = Warning, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // ================= 线上模板 · 万物可插 =================
+            SectionCard("线上模板 · 字段可插", "以线上模板为准：拉取字段定义，App 表单/详情/导入导出自动跟随；本地可自定义字段并推送线上") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton(if (busy) "处理中…" else "拉取线上模板", { if (!busy) { vm.pullSchema(); schemaVersion++ } }, Modifier.weight(1f), enabled = !busy)
+                    Text("当前 ${schema.size} 个字段（内置 ${schema.count { it.builtin }} · 扩展 ${schema.count { !it.builtin }}）", color = TextSecondary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1.2f))
+                }
+                if (schema.any { !it.builtin }) {
+                    Text("扩展字段：", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                    schema.filter { !it.builtin }.forEach { fd ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${fd.label}（${fd.key}·${fd.type}）", color = TextPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            GeekGhostButton("移除", color = Danger, onClick = { if (!busy) { vm.removeCustomField(fd.key); schemaVersion++ } })
+                        }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text("添加自定义字段（同步到线上模板）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                androidx.compose.material3.OutlinedTextField(
+                    value = newFieldKey,
+                    onValueChange = { newFieldKey = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("字段 Key（英文小写，如 scriptVersion）", color = TextMuted, style = MaterialTheme.typography.bodyMedium) },
+                    singleLine = true,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent, unfocusedBorderColor = Divider,
+                        focusedContainerColor = BgElev2, unfocusedContainerColor = BgElev,
+                        cursorColor = Accent,
+                        unfocusedTextColor = TextPrimary, focusedTextColor = TextPrimary,
+                        unfocusedLabelColor = TextSecondary, focusedLabelColor = Accent
+                    ),
+                    textStyle = MaterialTheme.typography.bodyMedium
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    value = newFieldLabel,
+                    onValueChange = { newFieldLabel = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("显示名（如 话术版本）", color = TextMuted, style = MaterialTheme.typography.bodyMedium) },
+                    singleLine = true,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent, unfocusedBorderColor = Divider,
+                        focusedContainerColor = BgElev2, unfocusedContainerColor = BgElev,
+                        cursorColor = Accent,
+                        unfocusedTextColor = TextPrimary, focusedTextColor = TextPrimary,
+                        unfocusedLabelColor = TextSecondary, focusedLabelColor = Accent
+                    ),
+                    textStyle = MaterialTheme.typography.bodyMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("text" to "文本", "number" to "数字", "date" to "日期", "select" to "单选", "multiselect" to "多选", "textarea" to "长文本").forEach { (t, n) ->
+                        val on = newFieldType == t
+                        Text(
+                            text = n,
+                            color = if (on) Accent else TextSecondary,
+                            modifier = Modifier
+                                .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
+                                .border(1.dp, if (on) Accent else Divider)
+                                .clickable { newFieldType = t }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
+                        )
+                    }
+                }
+                if (newFieldType == "select" || newFieldType == "multiselect") {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = newFieldOptions,
+                        onValueChange = { newFieldOptions = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("选项（逗号分隔，如 新客,老客,转介绍）", color = TextMuted, style = MaterialTheme.typography.bodyMedium) },
+                        singleLine = true,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent, unfocusedBorderColor = Divider,
+                            focusedContainerColor = BgElev2, unfocusedContainerColor = BgElev,
+                            cursorColor = Accent,
+                            unfocusedTextColor = TextPrimary, focusedTextColor = TextPrimary,
+                            unfocusedLabelColor = TextSecondary, focusedLabelColor = Accent
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                GeekGhostButton("添加字段", color = if (busy) TextMuted else Accent, onClick = {
+                    if (busy) return@GeekGhostButton
+                    vm.addCustomField(
+                        newFieldKey,
+                        newFieldLabel,
+                        newFieldType,
+                        newFieldOptions.split(',', '，').map { it.trim() }.filter { it.isNotBlank() }
+                    )
+                    schemaVersion++
+                    newFieldKey = ""; newFieldLabel = ""; newFieldOptions = ""
+                })
+                Text("拉取线上模板后，表单/详情/导入导出表头自动跟随线上字段；自定义字段同步到线上模板，全网生效。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 时光机 =================

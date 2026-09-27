@@ -5,6 +5,7 @@ import android.net.Uri
 import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.IntentLevel
 import com.realtor.geeksales.data.repo.CustomerRepository
+import com.realtor.geeksales.data.schema.SchemaStore
 import com.realtor.geeksales.util.Formatter
 import com.opencsv.CSVReaderBuilder
 import com.opencsv.CSVWriterBuilder
@@ -28,16 +29,32 @@ data class ImportReport(
 @Singleton
 class CsvManager @Inject constructor(
     @ApplicationContext private val ctx: Context,
-    private val repo: CustomerRepository
+    private val repo: CustomerRepository,
+    private val schemaStore: SchemaStore
 ) {
     companion object {
+        /** 内置 23 列表头（v1.7 起含通讯录对齐字段）；扩展字段列追加其后，表头格式 label(key) */
         val HEADERS = arrayOf(
             "姓名", "手机号", "备用电话", "性别", "年龄",
             "微信", "来源", "意向区域", "预算(万)下限", "预算(万)上限",
             "房型", "意向楼盘", "意向等级(A/B/C/D/U)", "备注", "下次跟进(YYYY-MM-DD)",
-            // v1.7：通讯录对齐扩展列（可选，旧模板可继续使用）
             "邮箱", "公司", "职位", "地址", "昵称", "网站", "生日(YYYY-MM-DD)", "即时消息"
         )
+        const val BUILTIN_COLS = 23
+    }
+
+    /** 扩展列表头：label(key) */
+    fun extHeader(def: com.realtor.geeksales.data.schema.FieldDef): String =
+        "${def.label}(${def.key})"
+
+    /** 当前扩展字段（builtin=false，按 order） */
+    private fun extDefs(): List<com.realtor.geeksales.data.schema.FieldDef> =
+        schemaStore.current().filter { !it.builtin }.sortedBy { it.order }
+
+    /** 解析表头单元格为 fieldKey：label(key) → key；无括号则用原名 */
+    private fun headerToKey(h: String): String {
+        val m = Regex(".*\\(([^()]+)\\)$").find(h.trim())
+        return m?.groupValues?.get(1)?.trim() ?: h.trim()
     }
 
     suspend fun importFrom(uri: Uri): ImportReport = withContext(Dispatchers.IO) {
@@ -47,11 +64,14 @@ class CsvManager @Inject constructor(
         var invalid = 0
         runCatching {
             ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                val reader = CSVReaderBuilder(InputStreamReader(ins, Charsets.UTF_8))
-                    .withSkipLines(1)
-                    .build()
+                val reader = CSVReaderBuilder(InputStreamReader(ins, Charsets.UTF_8)).build()
+                // 手动读表头：内置列固定在前，其后为扩展字段列（label(key)）
+                val header = reader.readNext() ?: return@use
+                val extKeys = (BUILTIN_COLS until header.size).map { header[it].trim() }
+                    .map { headerToKey(it) }
+                    .filter { it.isNotBlank() && it !in com.realtor.geeksales.data.schema.BuiltinKeys.ALL }
                 // 先读完文件做归一化与文件内去重，避免逐行查库造成假死
-                val parsed = mutableListOf<Customer>()
+                val parsed = mutableListOf<Pair<Customer, Map<String, String>>>()
                 val seenInFile = HashSet<String>()
                 var row: Array<String>?
                 while (reader.readNext().also { row = it } != null) {
@@ -97,7 +117,12 @@ class CsvManager @Inject constructor(
                     val website = cells.getOrNull(20)?.trim().takeIf { !it.isNullOrBlank() }
                     val birthday = cells.getOrNull(21)?.trim().takeIf { !it.isNullOrBlank() }
                     val im = cells.getOrNull(22)?.trim().takeIf { !it.isNullOrBlank() }
-                    parsed += Customer(
+                    val ext = HashMap<String, String>()
+                    extKeys.forEachIndexed { i, k ->
+                        val v = cells.getOrNull(BUILTIN_COLS + i)?.trim().orEmpty()
+                        if (v.isNotEmpty()) ext[k] = v
+                    }
+                    parsed += (Customer(
                         name = name, phone = phone, phoneNormalized = norm,
                         phone2 = phone2, gender = gender, age = age, wechat = wechat,
                         source = source, areaPref = areaPref,
@@ -107,13 +132,13 @@ class CsvManager @Inject constructor(
                         email = email, company = company, jobTitle = jobTitle,
                         address = address, nickname = nickname, website = website,
                         birthday = birthday, im = im
-                    )
+                    ) to ext)
                     if (parsed.size % 500 == 0) kotlinx.coroutines.yield()
                 }
                 // 批量查重：分批查已存在号码，500条yield一次
                 val existingPhones = HashSet<String>()
                 parsed.chunked(500).forEach { chunk ->
-                    chunk.forEach { c ->
+                    chunk.forEach { (c, _) ->
                         if (repo.getByPhoneNormalized(c.phoneNormalized) != null) {
                             existingPhones.add(c.phoneNormalized)
                             dup++
@@ -121,9 +146,15 @@ class CsvManager @Inject constructor(
                     }
                     kotlinx.coroutines.yield()
                 }
-                val toInsert = parsed.filter { it.phoneNormalized !in existingPhones }
+                val toInsert = parsed.filter { (c, _) -> c.phoneNormalized !in existingPhones }
                 toInsert.chunked(500).forEach { batch ->
-                    ok += repo.upsertAll(batch).count { it > 0 }
+                    batch.forEach { (c, ext) ->
+                        val id = repo.upsert(c)
+                        if (id > 0) {
+                            ok++
+                            if (ext.isNotEmpty()) repo.putExtFields(id, ext)
+                        }
+                    }
                     kotlinx.coroutines.yield()
                 }
             }
@@ -135,13 +166,21 @@ class CsvManager @Inject constructor(
 
     suspend fun exportTo(uri: Uri): Int = withContext(Dispatchers.IO) {
         val all = repo.getAll()
+        val extDefs = extDefs()
+        // 批量取扩展字段（避免逐客户查库卡顿）
+        val extByCustomer = HashMap<Long, Map<String, String>>()
+        all.chunked(200).forEach { chunk ->
+            chunk.forEach { c -> extByCustomer[c.id] = repo.extFieldsOf(c.id) }
+            kotlinx.coroutines.yield()
+        }
         val os = ctx.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("无法写入文件，请检查存储权限")
         os.use {
             os.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())) // UTF-8 BOM for Excel
             val writer = CSVWriterBuilder(OutputStreamWriter(os, Charsets.UTF_8)).build()
-            writer.writeNext(HEADERS)
+            writer.writeNext(HEADERS + extDefs.map { extHeader(it) }.toTypedArray())
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
             all.forEach { c ->
+                val ext = extByCustomer[c.id].orEmpty()
                 writer.writeNext(arrayOf(
                     c.name, c.phone, c.phone2.orEmpty(),
                     c.gender.orEmpty(), c.age?.toString().orEmpty(),
@@ -153,7 +192,7 @@ class CsvManager @Inject constructor(
                     c.email.orEmpty(), c.company.orEmpty(), c.jobTitle.orEmpty(),
                     c.address.orEmpty(), c.nickname.orEmpty(), c.website.orEmpty(),
                     c.birthday.orEmpty(), c.im.orEmpty()
-                ))
+                ) + extDefs.map { ext[it.key].orEmpty() }.toTypedArray())
             }
             writer.flushQuietly()
         }

@@ -34,7 +34,9 @@ data class WbContact(
     @SerialName("nextFollowupDate") val nextFollowupDate: String? = null,
     val tags: List<WbTag> = emptyList(),
     @SerialName("tagIds") val tagIds: List<String> = emptyList(),
-    val memo: String? = null
+    val memo: String? = null,
+    /** 自定义扩展字段（线上模板自定义字段，key→value） */
+    @SerialName("customFields") val customFields: Map<String, String> = emptyMap()
 )
 
 @Serializable
@@ -52,6 +54,17 @@ data class WbContactPage(
     val total: Int = 0,
     val page: Int = 1,
     @SerialName("pageSize") val pageSize: Int = 20
+)
+
+/** 线上模板字段定义（GET /api/schema / POST /api/schema/fields 的载荷） */
+data class WbRemoteField(
+    val key: String,
+    val label: String,
+    val type: String = "text",
+    val group: String? = null,
+    val required: Boolean = false,
+    val options: List<String> = emptyList(),
+    val order: Int = 0
 )
 
 /** 知行朋友圈跟进记录（对应 TMA 通话登记/跟进历史） */
@@ -176,6 +189,31 @@ class WorkbuddyApi @Inject constructor(
         WbResult.Success(list)
     }
 
+    /** 创建标签（线上不存在同名标签时，导出前自动创建；category=custom 与线上自定义标签对齐） */
+    suspend fun createTag(name: String, category: String = "custom", color: String = "#3b82f6"): WbResult<WbTag> =
+        withContext(Dispatchers.IO) {
+            val body = buildString {
+                append("{\"name\":\"${esc(name)}\",")
+                append("\"category\":\"${esc(category)}\",")
+                append("\"color\":\"${esc(color)}\"}")
+            }
+            val resp = post("/tags", body)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            runCatching {
+                val el = json.parseToJsonElement(resp)
+                WbTag(
+                    id = (el as? JsonObject)?.get("id")?.jsonPrimitive?.content.orEmpty(),
+                    name = (el as? JsonObject)?.get("name")?.jsonPrimitive?.content.orEmpty(),
+                    category = (el as? JsonObject)?.get("category")?.jsonPrimitive?.content,
+                    color = (el as? JsonObject)?.get("color")?.jsonPrimitive?.content
+                )
+            }.fold(
+                { WbResult.Success(it) as WbResult<WbTag> },
+                { WbResult.Error("解析失败：$resp") }
+            )
+        }
+
     suspend fun createContact(c: WbContact): WbResult<String> = withContext(Dispatchers.IO) {
         val resp = post("/contacts", buildContactJson(c))
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
@@ -273,6 +311,53 @@ class WorkbuddyApi @Inject constructor(
         else WbResult.Success(v)
     }
 
+    /** 拉取线上模板字段定义（GET /api/schema）；兼容 items/fields/直接数组 三种响应 */
+    suspend fun fetchSchema(): WbResult<List<WbRemoteField>> = withContext(Dispatchers.IO) {
+        val body = get("/schema")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        val arr = runCatching {
+            val el = json.parseToJsonElement(body)
+            when (el) {
+                is JsonArray -> el
+                is JsonObject -> el["items"] as? JsonArray ?: el["fields"] as? JsonArray ?: JsonArray(emptyList())
+                else -> JsonArray(emptyList())
+            }
+        }.getOrNull() ?: JsonArray(emptyList())
+        val list = arr.mapNotNull { el ->
+            runCatching {
+                val o = el.jsonObject
+                WbRemoteField(
+                    key = o["key"]?.jsonPrimitive?.content.orEmpty(),
+                    label = o["label"]?.jsonPrimitive?.content.orEmpty(),
+                    type = o["type"]?.jsonPrimitive?.content.orEmpty(),
+                    group = o["group"]?.jsonPrimitive?.content,
+                    required = o["required"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
+                    options = (o["options"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty(),
+                    order = o["order"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                )
+            }.getOrNull()
+        }.filter { it.key.isNotBlank() }
+        WbResult.Success(list)
+    }
+
+    /** 推送自定义字段定义到线上模板（POST /api/schema/fields），线上模板即字段集 */
+    suspend fun pushFieldDef(def: WbRemoteField): WbResult<Unit> = withContext(Dispatchers.IO) {
+        val body = buildString {
+            append("{\"key\":\"${esc(def.key)}\",")
+            append("\"label\":\"${esc(def.label)}\",")
+            append("\"type\":\"${esc(def.type)}\",")
+            if (!def.group.isNullOrBlank()) append("\"group\":\"${esc(def.group)}\",")
+            append("\"required\":${def.required},")
+            if (def.options.isNotEmpty()) {
+                append("\"options\":[${def.options.joinToString(",") { "\"${esc(it)}\"" }}],")
+            }
+            append("\"order\":${def.order}}")
+        }
+        val resp = post("/schema/fields", body)
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
+    }
+
     // ---- 底层 HTTP ----
     private fun buildContactJson(c: WbContact): String {
         val parts = mutableListOf<String>()
@@ -290,6 +375,10 @@ class WorkbuddyApi @Inject constructor(
         put("memo", c.memo)
         if (c.tagIds.isNotEmpty()) {
             parts.add("\"tagIds\":[${c.tagIds.joinToString(",") { "\"${esc(it)}\"" }}]")
+        }
+        if (c.customFields.isNotEmpty()) {
+            val cf = c.customFields.entries.joinToString(",") { (k, v) -> "\"${esc(k)}\":\"${esc(v)}\"" }
+            parts.add("\"customFields\":{$cf}")
         }
         return "{" + parts.joinToString(",") + "}"
     }

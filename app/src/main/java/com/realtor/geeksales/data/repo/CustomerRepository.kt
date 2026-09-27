@@ -2,6 +2,8 @@
 
 import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.CustomerDao
+import com.realtor.geeksales.data.db.CustomerField
+import com.realtor.geeksales.data.db.CustomerFieldDao
 import com.realtor.geeksales.data.db.CustomerTagMap
 import com.realtor.geeksales.data.db.FollowUp
 import com.realtor.geeksales.data.db.FollowUpDao
@@ -22,7 +24,8 @@ class CustomerRepository @Inject constructor(
     private val customerDao: CustomerDao,
     private val followUpDao: FollowUpDao,
     private val tagDao: TagDao,
-    private val smsDao: SmsDao
+    private val smsDao: SmsDao,
+    private val customerFieldDao: CustomerFieldDao
 ) {
     fun observeFiltered(
         query: String?,
@@ -257,6 +260,40 @@ class CustomerRepository @Inject constructor(
 
     /** 清空短信表（时光机恢复前） */
     suspend fun clearAllSms() = smsDao.clearAll()
+
+    // ---- 扩展字段（线上模板 schema 驱动的 EAV 存储）----
+    fun observeExtFieldsOf(customerId: Long): Flow<List<CustomerField>> =
+        customerFieldDao.observeFieldsOf(customerId)
+
+    suspend fun extFieldsOf(customerId: Long): Map<String, String> =
+        customerFieldDao.fieldsOf(customerId).associate { it.fieldKey to it.fieldValue }
+
+    suspend fun extFieldValue(customerId: Long, key: String): String? =
+        customerFieldDao.valueOf(customerId, key)
+
+    /** 写单个扩展字段 */
+    suspend fun putExtField(customerId: Long, key: String, value: String) {
+        if (customerId <= 0L || key.isBlank()) return
+        customerFieldDao.upsert(CustomerField(customerId = customerId, fieldKey = key, fieldValue = value))
+    }
+
+    /** 批量写扩展字段（表单保存/云端导入） */
+    suspend fun putExtFields(customerId: Long, values: Map<String, String>) {
+        if (customerId <= 0L) return
+        customerFieldDao.upsertAll(values.map { (k, v) -> CustomerField(customerId = customerId, fieldKey = k, fieldValue = v) })
+    }
+
+    suspend fun clearExtFields(customerId: Long) = customerFieldDao.clearForCustomer(customerId)
+
+    suspend fun deleteExtField(customerId: Long, key: String) = customerFieldDao.delete(customerId, key)
+
+    suspend fun allExtFieldKeys(): List<String> = customerFieldDao.allKeys()
+
+    /** 全部扩展字段（时光机快照用） */
+    suspend fun allExtFields(): List<com.realtor.geeksales.data.db.CustomerField> = customerFieldDao.getAll()
+
+    /** 清空全部扩展字段（时光机恢复前） */
+    suspend fun clearAllExtFields() = customerFieldDao.clearAll()
 }
 
 data class TodayStats(

@@ -19,9 +19,10 @@ class Converters {
         FollowUp::class,
         Tag::class,
         CustomerTagMap::class,
-        SmsMessage::class
+        SmsMessage::class,
+        CustomerField::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -30,6 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun followUpDao(): FollowUpDao
     abstract fun tagDao(): TagDao
     abstract fun smsDao(): SmsDao
+    abstract fun customerFieldDao(): CustomerFieldDao
 
     companion object {
         const val NAME = "geek_sales.db"
@@ -70,6 +72,22 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_messages_customerId` ON `sms_messages` (`customerId`)")
                     db.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_messages_messageDate` ON `sms_messages` (`messageDate`)")
+                }
+            },
+            // v4 → v5：客户扩展字段表（线上模板 schema 驱动的"万物可插"存储）
+            object : androidx.room.migration.Migration(4, 5) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `customer_fields` (" +
+                            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                            "`customerId` INTEGER NOT NULL, " +
+                            "`fieldKey` TEXT NOT NULL, " +
+                            "`fieldValue` TEXT NOT NULL)"
+                    )
+                    db.execSQL(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS `index_customer_fields_customerId_fieldKey` " +
+                            "ON `customer_fields` (`customerId`, `fieldKey`)"
+                    )
                 }
             }
         )

@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.IntentLevel
 import com.realtor.geeksales.data.repo.CustomerRepository
+import com.realtor.geeksales.data.schema.FieldDef
+import com.realtor.geeksales.data.schema.SchemaStore
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,16 +42,23 @@ data class EditFormState(
     val nickname: String = "",
     val website: String = "",
     val birthday: String = "",
-    val im: String = ""
+    val im: String = "",
+    // 扩展字段（线上模板自定义字段，key→value 存 customer_fields）
+    val extFields: Map<String, String> = emptyMap()
 )
 
 @HiltViewModel
 class CustomerEditViewModel @Inject constructor(
-    private val repo: CustomerRepository
+    private val repo: CustomerRepository,
+    private val schemaStore: SchemaStore
 ) : ViewModel() {
 
     private val _form = MutableStateFlow(EditFormState())
     val form: StateFlow<EditFormState> = _form
+
+    /** 当前生效模板字段（内置 + 扩展），供表单动态渲染 */
+    private val _schema = MutableStateFlow(schemaStore.current())
+    val schema: StateFlow<List<FieldDef>> = _schema
 
     val savedOk = MutableStateFlow(false)
 
@@ -70,6 +79,7 @@ class CustomerEditViewModel @Inject constructor(
         loadedId = id
         // 回显已有标签，避免编辑保存时 unlinkAll 误删原标签（数据丢失）
         val existingTags = repo.tagsOf(id).joinToString(", ")
+        val ext = repo.extFieldsOf(id)
         _form.value = EditFormState(
             id = c.id,
             name = c.name,
@@ -95,12 +105,18 @@ class CustomerEditViewModel @Inject constructor(
             nickname = c.nickname ?: "",
             website = c.website ?: "",
             birthday = c.birthday ?: "",
-            im = c.im ?: ""
+            im = c.im ?: "",
+            extFields = ext
         )
     }
 
     fun update(fn: (EditFormState) -> EditFormState) {
         _form.value = fn(_form.value)
+    }
+
+    /** 更新单个扩展字段值（动态表单） */
+    fun updateExt(key: String, value: String) {
+        _form.value = _form.value.copy(extFields = _form.value.extFields + (key to value))
     }
 
     fun save() = viewModelScope.launch {
@@ -137,6 +153,11 @@ class CustomerEditViewModel @Inject constructor(
             ),
             tags.takeIf { it.isNotEmpty() }
         )
-        if (id > 0L) savedOk.value = true
+        if (id > 0L) {
+            // 写扩展字段（非空值入库；空值删除保持干净）
+            repo.putExtFields(id, f.extFields.filterValues { it.isNotBlank() })
+            f.extFields.filterValues { it.isBlank() }.keys.forEach { k -> repo.deleteExtField(id, k) }
+            savedOk.value = true
+        }
     }
 }

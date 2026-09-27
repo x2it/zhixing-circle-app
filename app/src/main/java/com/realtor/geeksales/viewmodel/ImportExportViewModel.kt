@@ -21,7 +21,10 @@ import com.realtor.geeksales.data.remote.WbContact
 import com.realtor.geeksales.data.remote.WbResult
 import com.realtor.geeksales.data.remote.WorkbuddyApi
 import com.realtor.geeksales.data.remote.WbMessage
+import com.realtor.geeksales.data.remote.WbRemoteField
 import com.realtor.geeksales.data.repo.CustomerRepository
+import com.realtor.geeksales.data.schema.FieldDef
+import com.realtor.geeksales.data.schema.SchemaStore
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -70,11 +73,92 @@ class ImportExportViewModel @Inject constructor(
     private val repo: CustomerRepository,
     private val wbApi: WorkbuddyApi,
     private val apiKeyStore: ApiKeyStore,
+    private val schemaStore: SchemaStore,
     @ApplicationContext private val ctx: Context
 ) : ViewModel() {
 
     private val _status = MutableStateFlow(IOStatus(message = "idle"))
     val status: StateFlow<IOStatus> = _status
+
+    // ---- 线上模板（schema）：拉取 / 自定义字段 ----
+
+    /** 拉取线上模板字段定义并合并进本地 schema（自动适配：线上加字段→App 跟随） */
+    fun pullSchema() = doRun("拉取线上模板中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            when (val r = wbApi.fetchSchema()) {
+                is WbResult.Error -> _status.value = IOStatus(message = "拉取模板失败：${r.message}（线上需已开放 /api/schema 接口）")
+                is WbResult.Success -> {
+                    if (r.data.isEmpty()) {
+                        _status.value = IOStatus(message = "线上模板暂无自定义字段（已保留本地内置模板）")
+                        return@withContext
+                    }
+                    val remote = r.data.map {
+                        FieldDef(
+                            key = it.key,
+                            label = it.label.ifBlank { it.key },
+                            type = it.type.ifBlank { "text" },
+                            group = it.group?.ifBlank { null } ?: "其他",
+                            required = it.required,
+                            options = it.options,
+                            order = it.order,
+                            builtin = false
+                        )
+                    }
+                    val merged = schemaStore.mergeRemote(remote)
+                    _status.value = IOStatus(message = "模板已同步：${merged.size} 个字段（线上定义为准）")
+                }
+            }
+        }
+    }
+
+    /** 当前生效模板 */
+    fun currentSchema(): List<FieldDef> = schemaStore.current()
+
+    /** 添加本地自定义字段并推送线上（线上失败仅提示，本地仍生效——离线可用） */
+    fun addCustomField(key: String, label: String, type: String, options: List<String>) = doRun("添加自定义字段中…") {
+        withContext(Dispatchers.IO) {
+            val k = key.trim().lowercase(Locale.ROOT)
+            if (k.isBlank() || label.isBlank()) {
+                _status.value = IOStatus(message = "字段 key 与显示名不能为空")
+                return@withContext
+            }
+            val cur = schemaStore.current()
+            if (cur.any { it.key == k }) {
+                _status.value = IOStatus(message = "字段 key「$k」已存在，请换一个（避免与现有字段冲突）")
+                return@withContext
+            }
+            val def = FieldDef(
+                key = k, label = label.trim(), type = type.trim().ifBlank { "text" },
+                group = "自定义", options = options.filter { it.isNotBlank() }.distinct(),
+                order = (cur.maxOfOrNull { it.order } ?: 0) + 10, builtin = false
+            )
+            schemaStore.addLocalField(def)
+            // 推送到线上模板（可选成功：本地离线也能用）
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "自定义字段「$label」已添加（未配置 API Key，未推送线上）")
+                return@withContext
+            }
+            when (val r = wbApi.pushFieldDef(
+                WbRemoteField(
+                    key = def.key, label = def.label, type = def.type,
+                    group = def.group, required = def.required, options = def.options, order = def.order
+                )
+            )) {
+                is WbResult.Success -> _status.value = IOStatus(message = "自定义字段「$label」已添加并同步到线上模板")
+                is WbResult.Error -> _status.value = IOStatus(message = "自定义字段「$label」已添加本地，推送线上失败：${r.message}")
+            }
+        }
+    }
+
+    /** 移除本地自定义字段（仅本地；已同步线上的需在线上删除） */
+    fun removeCustomField(key: String) {
+        schemaStore.removeLocalField(key)
+        _status.value = IOStatus(message = "已移除本地自定义字段（如线上仍有，请在网页删除）")
+    }
 
     fun importCsv(uri: Uri) = doRun("CSV 导入中…") {
         val r = csv.importFrom(uri)
@@ -508,12 +592,13 @@ class ImportExportViewModel @Inject constructor(
                     when (mode) {
                         // 本地优先：本地为准，跳过
                         SyncMode.LOCAL_FIRST -> skipped++
-                        // 云端优先：线上覆盖本地（字段 + 标签 + 线上 id）
+                        // 云端优先：线上覆盖本地（字段 + 标签 + 扩展字段 + 线上 id）
                         SyncMode.CLOUD_FIRST -> {
                             overridden++
                             val merged = wbToCustomer(wb, phoneN).copy(id = existing.id, createdAt = existing.createdAt)
                             repo.upsertAndGetId(merged)
                             if (wb.id.isNotBlank()) repo.updateWbContactId(existing.id, wb.id)
+                            if (wb.customFields.isNotEmpty()) repo.putExtFields(existing.id, wb.customFields)
                             val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
                             if (tagNames.isNotEmpty()) {
                                 repo.tagsOf(existing.id).filter { it !in tagNames }
@@ -521,7 +606,7 @@ class ImportExportViewModel @Inject constructor(
                                 repo.applyTags(existing.id, tagNames)
                             }
                         }
-                        // 智能合并：字段级补空，冲突保留本地
+                        // 智能合并：字段级补空，冲突保留本地；扩展字段同样"本地空←线上非空"
                         SyncMode.SMART -> {
                             val merged = mergeWbIntoLocal(existing, wb)
                             if (merged != existing) {
@@ -529,6 +614,14 @@ class ImportExportViewModel @Inject constructor(
                                 if (wb.id.isNotBlank() && existing.wbContactId.isNullOrBlank()) {
                                     repo.updateWbContactId(existing.id, wb.id)
                                 }
+                            }
+                            if (wb.customFields.isNotEmpty()) {
+                                val localExt = repo.extFieldsOf(existing.id)
+                                val mergedExt = HashMap(localExt)
+                                wb.customFields.forEach { (k, v) ->
+                                    if (localExt[k].isNullOrBlank() && v.isNotBlank()) mergedExt[k] = v
+                                }
+                                repo.putExtFields(existing.id, mergedExt)
                             }
                             val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
                             if (tagNames.isNotEmpty()) repo.applyTags(existing.id, tagNames)
@@ -543,6 +636,7 @@ class ImportExportViewModel @Inject constructor(
                     imported++
                     newIds.add(id)
                     if (wb.id.isNotBlank()) repo.updateWbContactId(id, wb.id)
+                    if (wb.customFields.isNotEmpty()) repo.putExtFields(id, wb.customFields)
                     val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
                     if (tagNames.isNotEmpty()) repo.applyTags(id, tagNames)
                 }
@@ -600,6 +694,26 @@ class ImportExportViewModel @Inject constructor(
                     if (t.id.isNotBlank() && t.name.isNotBlank()) tagIdByName[t.name] = t.id
                 }
             }
+            // 3.5) 本地自定义标签自动同步到线上（防止导出丢标签）
+            //     线上有而本地没有的标签会在导入时经 applyTags 自动创建（名字一致即对应）；
+            //     反向（本地有而线上没有）在这里补建，保证标签双向不丢失
+            var createdTags = 0
+            var failedTags = 0
+            repo.allTags().forEach { t ->
+                if (t.name.isNotBlank() && !tagIdByName.containsKey(t.name)) {
+                    when (val r = wbApi.createTag(t.name)) {
+                        is WbResult.Success -> {
+                            tagIdByName[t.name] = r.data.id
+                            createdTags++
+                        }
+                        is WbResult.Error -> failedTags++
+                    }
+                }
+            }
+            if (createdTags > 0) _status.value = IOStatus(
+                running = true,
+                message = "已自动创建 $createdTags 个本地标签到知行朋友圈…"
+            )
             // 3) 按同步模式导出联系人
             val mode = syncMode()
             var created = 0
@@ -615,7 +729,8 @@ class ImportExportViewModel @Inject constructor(
                     return@forEach
                 }
                 val tagIds = repo.tagsOf(c.id).mapNotNull { tagIdByName[it] }
-                val wb = customerToWb(c, tagIds)
+                val ext = repo.extFieldsOf(c.id)
+                val wb = customerToWb(c, tagIds, ext)
                 val remote = remoteByPhone[phoneN]
                 try {
                     when {
@@ -681,7 +796,7 @@ class ImportExportViewModel @Inject constructor(
             }
             _status.value = IOStatus(
                 message = "知行同步完成",
-                syncSummary = "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone），跟进记录推送 $pushed 条，备份：$backup"
+                syncSummary = "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone），跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}，备份：$backup"
             )
         }
     }
@@ -980,8 +1095,8 @@ class ImportExportViewModel @Inject constructor(
             updatedAt = System.currentTimeMillis()
         )
 
-    /** 本地客户 → 线上联系人（导出用） */
-    private fun customerToWb(c: Customer, tagIds: List<String>): com.realtor.geeksales.data.remote.WbContact =
+    /** 本地客户 → 线上联系人（导出用）；customFields 为本地扩展字段（线上模板自定义字段） */
+    private fun customerToWb(c: Customer, tagIds: List<String>, customFields: Map<String, String> = emptyMap()): com.realtor.geeksales.data.remote.WbContact =
         com.realtor.geeksales.data.remote.WbContact(
             name = c.name,
             nickname = c.nickname,
@@ -991,7 +1106,8 @@ class ImportExportViewModel @Inject constructor(
             source = c.source,
             nextFollowupDate = Formatter.epochToDay(c.nextFollowAt),
             memo = c.note,
-            tagIds = tagIds
+            tagIds = tagIds,
+            customFields = customFields
         )
 
     /** 本地跟进记录 → 线上 content 文本（含结果标签，便于回读） */

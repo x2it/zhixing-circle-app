@@ -42,6 +42,7 @@ class SnapshotManager @Inject constructor(
         private const val SHEET_FOLLOWUPS = "跟进"
         private const val SHEET_TAGS = "标签"
         private const val SHEET_SMS = "短信"
+        private const val SHEET_EXTFIELDS = "扩展字段"
         private val MIN_FMT = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
         private val DAY_FMT = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
     }
@@ -115,11 +116,19 @@ class SnapshotManager @Inject constructor(
             val phone = if (s.customerId > 0) idByPhone[s.customerId] ?: "" else ""
             smsRows.add(listOf(phone, s.phone, s.body, s.direction, MIN_FMT.format(Date(s.messageDate))))
         }
+        // 5) 扩展字段（线上模板自定义字段值）
+        val extRows = ArrayList<List<String>>()
+        extRows.add(listOf("客户手机号", "字段Key", "字段值"))
+        repo.allExtFields().forEach { f ->
+            val phone = idByPhone[f.customerId] ?: ""
+            if (phone.isNotBlank() && f.fieldKey.isNotBlank()) extRows.add(listOf(phone, f.fieldKey, f.fieldValue))
+        }
         return listOf(
             SHEET_CUSTOMERS to customers,
             SHEET_FOLLOWUPS to fuRows,
             SHEET_TAGS to tagRows,
-            SHEET_SMS to smsRows
+            SHEET_SMS to smsRows,
+            SHEET_EXTFIELDS to extRows
         )
     }
 
@@ -141,15 +150,17 @@ class SnapshotManager @Inject constructor(
                     ?: return@use "快照中缺少「客户」表"
                 val customers = parseCustomers(customersSheet)
                 if (customers.isEmpty()) return@use "快照中没有客户数据"
-                // 2) 解析跟进 / 标签 / 短信（均以客户手机号为关联键）
+                // 2) 解析跟进 / 标签 / 短信 / 扩展字段（均以客户手机号为关联键）
                 val fuRows = parseSheetRows(wb.getSheet(SHEET_FOLLOWUPS))
                 val tagRows = parseSheetRows(wb.getSheet(SHEET_TAGS))
                 val smsRows = parseSheetRows(wb.getSheet(SHEET_SMS))
+                val extRows = parseSheetRows(wb.getSheet(SHEET_EXTFIELDS))
                 runCatching { wb.close() }
                 // 3) 清空重建
                 repo.deleteAll()
                 repo.clearAllTags()
                 repo.clearAllSms()
+                repo.clearAllExtFields()
                 val newIdByPhone = HashMap<String, Long>()
                 customers.chunked(500).forEach { batch ->
                     val ids = repo.upsertAll(batch)
@@ -206,6 +217,20 @@ class SnapshotManager @Inject constructor(
                     if (smsCount % 500 == 0) kotlinx.coroutines.yield()
                 }
                 if (smsToInsert.isNotEmpty()) repo.insertSms(smsToInsert)
+                // 扩展字段
+                var extCount = 0
+                val extByPhone = HashMap<String, MutableList<Pair<String, String>>>()
+                extRows.forEach { r ->
+                    val phone = r.getOrNull(0).orEmpty()
+                    val key = r.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return@forEach
+                    val value = r.getOrNull(2).orEmpty()
+                    extByPhone.getOrPut(phone) { mutableListOf() }.add(key to value)
+                    extCount++
+                }
+                extByPhone.forEach { (phone, pairs) ->
+                    val cid = newIdByPhone[phone] ?: return@forEach
+                    repo.putExtFields(cid, pairs.toMap())
+                }
                 null
             } ?: "快照解析失败"
         }.getOrElse { t ->

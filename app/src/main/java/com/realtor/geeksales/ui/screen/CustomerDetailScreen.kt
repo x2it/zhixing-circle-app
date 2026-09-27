@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +59,8 @@ fun CustomerDetailScreen(
     val c by vm.customer.collectAsStateWithLifecycle()
     val list by vm.followUps.collectAsStateWithLifecycle()
     val smsList by vm.smsMessages.collectAsStateWithLifecycle()
+    val extFields by vm.extFields.collectAsStateWithLifecycle()
+    val schema by vm.schema.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(id) { vm.setCustomerId(id) }
     // 超时降级：3 秒仍未加载出客户，显示明确错误态而非无限转圈（历史"看似假死"来源之一）
     var loadTimeout by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -119,26 +122,20 @@ fun CustomerDetailScreen(
                                 Text(customer.phone, color = Accent, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             }
                             if (!customer.phone2.isNullOrBlank()) Row { Text("备用  ", color = TextMuted, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.width(4.dp)); Text(customer.phone2!!, color = TextSecondary, style = MaterialTheme.typography.bodyMedium) }
-                            KV("性别", customer.gender); KV("年龄", customer.age?.toString()); KV("微信", customer.wechat); KV("来源", customer.source)
-                            KV("邮箱", customer.email)
-                            val org = listOfNotNull(customer.company, customer.jobTitle).joinToString(" · ").takeIf { it.isNotBlank() }
-                            KV("公司/职位", org)
-                            KV("地址", customer.address)
-                            KV("昵称", customer.nickname)
-                            KV("生日", customer.birthday)
-                            KV("网站", customer.website)
-                            KV("即时消息", customer.im)
-                            KV("区域", customer.areaPref)
-                            val budget = buildString {
-                                if (customer.budgetMinWan != null) append(customer.budgetMinWan)
-                                if (customer.budgetMinWan != null || customer.budgetMaxWan != null) append(" ~ ")
-                                if (customer.budgetMaxWan != null) append(customer.budgetMaxWan)
-                                if (isNotBlank()) append(" 万")
+                            // schema 驱动字段区：线上模板定义什么就显示什么（内置列 + 扩展字段）
+                            val schemaFields = remember(schema, extFields) {
+                                schema
+                                    .filter { it.key != com.realtor.geeksales.data.schema.BuiltinKeys.NAME &&
+                                        it.key != com.realtor.geeksales.data.schema.BuiltinKeys.PHONE &&
+                                        it.key != com.realtor.geeksales.data.schema.BuiltinKeys.PHONE2 &&
+                                        it.key != com.realtor.geeksales.data.schema.BuiltinKeys.INTENT_LEVEL &&
+                                        it.key != com.realtor.geeksales.data.schema.BuiltinKeys.NOTE }
+                                    .sortedBy { it.order }
                             }
-                            KV("预算", budget.ifBlank { null })
-                            KV("房型", customer.houseType)
-                            KV("意向楼盘", customer.targetProject)
-                            KV("下次跟进", if (customer.nextFollowAt == null) null else Formatter.full(customer.nextFollowAt))
+                            schemaFields.forEach { f ->
+                                val v = if (f.builtin) builtinDetailValue(f.key, customer) else extFields[f.key]
+                                if (!v.isNullOrBlank()) KV(f.label, v)
+                            }
                             KV("拨打次数", "${customer.dialCount}  |  最近 ${Formatter.full(customer.lastDialAt)}")
                             if (!customer.note.isNullOrBlank()) {
                                 Spacer(Modifier.height(4.dp))
@@ -190,6 +187,30 @@ fun CustomerDetailScreen(
             item { Spacer(Modifier.height(100.dp)) }
         }
     }
+}
+
+/** 内置字段值映射（详情展示用）：key → Customer 列值 */
+private fun builtinDetailValue(key: String, c: com.realtor.geeksales.data.db.Customer): String? = when (key) {
+    com.realtor.geeksales.data.schema.BuiltinKeys.GENDER -> c.gender
+    com.realtor.geeksales.data.schema.BuiltinKeys.AGE -> c.age?.toString()
+    com.realtor.geeksales.data.schema.BuiltinKeys.WECHAT -> c.wechat
+    com.realtor.geeksales.data.schema.BuiltinKeys.SOURCE -> c.source
+    com.realtor.geeksales.data.schema.BuiltinKeys.TAGS -> null // 标签另行展示
+    com.realtor.geeksales.data.schema.BuiltinKeys.EMAIL -> c.email
+    com.realtor.geeksales.data.schema.BuiltinKeys.IM -> c.im
+    com.realtor.geeksales.data.schema.BuiltinKeys.COMPANY -> c.company
+    com.realtor.geeksales.data.schema.BuiltinKeys.JOB_TITLE -> c.jobTitle
+    com.realtor.geeksales.data.schema.BuiltinKeys.BIRTHDAY -> c.birthday
+    com.realtor.geeksales.data.schema.BuiltinKeys.NICKNAME -> c.nickname
+    com.realtor.geeksales.data.schema.BuiltinKeys.ADDRESS -> c.address
+    com.realtor.geeksales.data.schema.BuiltinKeys.WEBSITE -> c.website
+    com.realtor.geeksales.data.schema.BuiltinKeys.AREA_PREF -> c.areaPref
+    com.realtor.geeksales.data.schema.BuiltinKeys.BUDGET_MIN -> c.budgetMinWan?.let { "$it 万" }
+    com.realtor.geeksales.data.schema.BuiltinKeys.BUDGET_MAX -> c.budgetMaxWan?.let { "$it 万" }
+    com.realtor.geeksales.data.schema.BuiltinKeys.HOUSE_TYPE -> c.houseType
+    com.realtor.geeksales.data.schema.BuiltinKeys.TARGET_PROJECT -> c.targetProject
+    com.realtor.geeksales.data.schema.BuiltinKeys.NEXT_FOLLOW_AT -> c.nextFollowAt?.let { Formatter.full(it) }
+    else -> null
 }
 
 @Composable

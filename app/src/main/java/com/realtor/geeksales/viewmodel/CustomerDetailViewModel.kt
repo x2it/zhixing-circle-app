@@ -1,10 +1,12 @@
-﻿package com.realtor.geeksales.viewmodel
+package com.realtor.geeksales.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.repo.CustomerRepository
+import com.realtor.geeksales.data.schema.FieldDef
+import com.realtor.geeksales.data.schema.SchemaStore
 import com.realtor.geeksales.telephony.DialerHelper
 import com.realtor.geeksales.telephony.ReminderScheduler
 import com.realtor.geeksales.util.Formatter
@@ -12,8 +14,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
@@ -23,10 +27,15 @@ import javax.inject.Inject
 class CustomerDetailViewModel @Inject constructor(
     private val repo: CustomerRepository,
     private val dialerHelper: DialerHelper,
-    private val reminderScheduler: ReminderScheduler
+    private val reminderScheduler: ReminderScheduler,
+    private val schemaStore: SchemaStore
 ) : ViewModel() {
 
     private val idFlow = MutableStateFlow(0L)
+
+    /** 当前生效模板字段（详情页按 schema 动态展示） */
+    private val _schema = MutableStateFlow(schemaStore.current())
+    val schema: StateFlow<List<FieldDef>> = _schema
 
     fun setCustomerId(id: Long) {
         if (id != idFlow.value) idFlow.value = id
@@ -36,6 +45,14 @@ class CustomerDetailViewModel @Inject constructor(
     val customer = idFlow.flatMapLatest { id ->
         if (id == 0L) flowOf(null) else repo.observeById(id)
     }.conflate().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** 客户扩展字段（线上模板自定义字段值） */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val extFields = idFlow.flatMapLatest { id ->
+        if (id == 0L) flowOf(emptyMap()) else repo.observeExtFieldsOf(id).map { list ->
+            list.associate { it.fieldKey to it.fieldValue }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val followUps = idFlow.flatMapLatest { id ->
