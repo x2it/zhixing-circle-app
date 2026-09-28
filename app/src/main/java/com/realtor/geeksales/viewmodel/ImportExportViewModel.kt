@@ -932,6 +932,8 @@ class ImportExportViewModel @Inject constructor(
             var skipped = 0
             var failed = 0
             var noPhone = 0
+            var lastErrCode: Int? = null
+            var lastErrMsg: String? = null
             val localAll = repo.getAll()
             val toCreate = mutableListOf<Pair<Customer, com.realtor.geeksales.data.remote.WbContact>>()
             val toUpdate = mutableListOf<Triple<Customer, com.realtor.geeksales.data.remote.WbContact, String>>()
@@ -980,7 +982,17 @@ class ImportExportViewModel @Inject constructor(
                                 if (local.wbContactId != item.id) repo.updateWbContactId(local.id, item.id)
                             }
                         }
-                        failed += rr.data.errors.count { it.index in ch.indices }
+                        if (rr.data.errors.isNotEmpty()) {
+                            // 记录真实拒绝原因（201 + errors 表示逐条被服务端拒绝，原因见 message）
+                            lastErrMsg = rr.data.errors.first().message.take(200)
+                            failed += rr.data.errors.count { it.index in ch.indices }
+                        }
+                    } else if (rr is WbResult.Error) {
+                        // 整批失败：记录状态码与服务端原文
+                        val code = rr.message.substringBefore(':').trim().toIntOrNull()
+                        if (code != null) lastErrCode = code
+                        lastErrMsg = rr.message.take(200)
+                        failed += ch.size
                     }
                 }
                 var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createContactsBatch(chunk.map { it.second }, batchMeta()) }
@@ -1090,7 +1102,14 @@ class ImportExportViewModel @Inject constructor(
                     "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone）",
                     "跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}",
                     "备份：$backup",
-                    if (hasFail) "失败原因多为：服务器地址不正确（应以 /api 结尾）或线上接口未开放；请检查「数据」页服务器地址后重试" else null
+                    if (hasFail) {
+                        when {
+                            lastErrCode == 401 -> "API Key 无效或已撤销：请在「数据」页重新生成并保存密钥"
+                            lastErrCode == 403 -> "线上接口未授权（403）：请让 Web 端检查对应同步开关"
+                            lastErrMsg != null -> "服务端返回：${lastErrMsg.orEmpty().take(160)}"
+                            else -> "失败原因多为：服务器地址不正确（应以 /api 结尾）或线上接口未开放；请检查「数据」页服务器地址后重试"
+                        }
+                    } else null
                 ).joinToString("\n")
             )
         }

@@ -302,7 +302,7 @@ private fun ExtField(f: FieldDef, value: String, onChange: (String) -> Unit) {
                 f.options.forEach { opt ->
                     val on = value == opt
                     Text(
-                        text = opt,
+                        text = if (opt == "U") "/" else opt,
                         color = if (on) Accent else TextSecondary,
                         modifier = Modifier
                             .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
@@ -326,7 +326,7 @@ private fun ExtField(f: FieldDef, value: String, onChange: (String) -> Unit) {
                 f.options.forEach { opt ->
                     val on = opt in selected
                     Text(
-                        text = opt,
+                        text = if (opt == "U") "/" else opt,
                         color = if (on) Accent else TextSecondary,
                         modifier = Modifier
                             .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
