@@ -45,7 +45,9 @@ data class IOStatus(
     val report: ImportReport? = null,
     val exportCount: Int? = null,
     /** 最近一次同步的明细（知行朋友圈） */
-    val syncSummary: String? = null
+    val syncSummary: String? = null,
+    /** 进度 0..1；null 表示不确定进度（转圈） */
+    val progress: Float? = null
 )
 
 /** 知行同步结果汇总 */
@@ -172,7 +174,7 @@ class ImportExportViewModel @Inject constructor(
     }
 
     fun importCsv(uri: Uri) = doRun("CSV 导入中…") {
-        val r = csv.importFrom(uri)
+        val r = csv.importFrom(uri) { p -> progress(0.05f + 0.9f * p, "CSV 导入中…（解析 → 查重 → 写入）") }
         _status.value = if (r.error != null) {
             IOStatus(message = "CSV 导入失败：${r.error}", report = r)
         } else {
@@ -180,7 +182,7 @@ class ImportExportViewModel @Inject constructor(
         }
     }
     fun importXlsx(uri: Uri) = doRun("Excel 导入中…") {
-        val r = excel.importFrom(uri)
+        val r = excel.importFrom(uri) { p -> progress(0.05f + 0.9f * p, "Excel 导入中…（解析 → 查重 → 写入）") }
         _status.value = if (r.error != null) {
             IOStatus(message = "Excel 导入失败：${r.error}", report = r)
         } else {
@@ -371,6 +373,142 @@ class ImportExportViewModel @Inject constructor(
             _status.value = IOStatus(
                 message = "导出到通讯录完成（跳过已有号码 ${all.size - toExport.size} 条）",
                 exportCount = toExport.size
+            )
+        }
+    }
+
+    /**
+     * 把本地客户标签落地为手机通讯录分组（云端 v2.0「通讯录分组落地方案」P1）。
+     * 增量安全模式：只新建缺失分组、只把客户加入对应分组；绝不删除任何既有分组/成员。
+     * 幂等：已存在的「分组-成员」关系跳过，重复执行不会产生重复成员。
+     */
+    fun syncGroupsFromTags() = doRun("标签同步到通讯录分组中…") {
+        withContext(Dispatchers.IO) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    ctx, android.Manifest.permission.WRITE_CONTACTS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(message = "需要通讯录写入权限，请先在系统设置中允许后重试")
+                return@withContext
+            }
+            val tags = repo.allTags().map { it.name }.filter { it.isNotBlank() }
+            if (tags.isEmpty()) {
+                _status.value = IOStatus(message = "本地还没有标签，请先在客户详情页添加标签（线上模板标签同步后也可用）")
+                return@withContext
+            }
+            val resolver = ctx.contentResolver
+            // 1) 标签 → 客户号码（一个客户多标签 → 加入多个分组，Android 原生支持）
+            val tagToPhones = HashMap<String, MutableSet<String>>()
+            repo.getAll().forEach { c ->
+                val t = repo.tagsOf(c.id)
+                if (t.isNotEmpty() && c.phoneNormalized.isNotBlank()) {
+                    t.forEach { tag -> tagToPhones.getOrPut(tag) { HashSet() }.add(c.phoneNormalized) }
+                }
+            }
+            // 2) 已有分组 id（DELETED=0）
+            val groupIdByName = HashMap<String, Long>()
+            resolver.query(
+                ContactsContract.Groups.CONTENT_URI,
+                arrayOf(ContactsContract.Groups._ID, ContactsContract.Groups.TITLE),
+                "${ContactsContract.Groups.DELETED}=0", null, null
+            )?.use { c ->
+                val idCol = c.getColumnIndexOrThrow(ContactsContract.Groups._ID)
+                val titleCol = c.getColumnIndexOrThrow(ContactsContract.Groups.TITLE)
+                while (c.moveToNext()) groupIdByName[c.getString(titleCol).orEmpty()] = c.getLong(idCol)
+            }
+            // 3) 号码 → raw_contact_id：Phone(NUMBER, CONTACT_ID) → RawContacts(CONTACT_ID→_ID)
+            val phoneToContactId = HashMap<String, Long>()
+            resolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID
+                ), null, null, null
+            )?.use { c ->
+                val nCol = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                val idCol = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                while (c.moveToNext()) {
+                    val n = Formatter.normalizePhone(c.getString(nCol).orEmpty())
+                    if (n.isNotBlank()) phoneToContactId.putIfAbsent(n, c.getLong(idCol))
+                }
+            }
+            val contactIdToRaw = HashMap<Long, Long>()
+            resolver.query(
+                ContactsContract.RawContacts.CONTENT_URI,
+                arrayOf(ContactsContract.RawContacts._ID, ContactsContract.RawContacts.CONTACT_ID),
+                null, null, null
+            )?.use { c ->
+                val rawCol = c.getColumnIndexOrThrow(ContactsContract.RawContacts._ID)
+                val cidCol = c.getColumnIndexOrThrow(ContactsContract.RawContacts.CONTACT_ID)
+                while (c.moveToNext()) contactIdToRaw.putIfAbsent(c.getLong(cidCol), c.getLong(rawCol))
+            }
+            // 3.5) 已存在的「分组-成员」关系（幂等去重）
+            val existingMembership = HashSet<String>()
+            resolver.query(
+                ContactsContract.Data.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.Data.RAW_CONTACT_ID,
+                    ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID
+                ),
+                "${ContactsContract.Data.MIMETYPE}='${ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE}'",
+                null, null
+            )?.use { c ->
+                val rawCol = c.getColumnIndexOrThrow(ContactsContract.Data.RAW_CONTACT_ID)
+                val gCol = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID)
+                while (c.moveToNext()) {
+                    existingMembership.add("${c.getLong(gCol)}:${c.getLong(rawCol)}")
+                }
+            }
+            // 4) 建分组 + 归组（新分组用 backref 引用其插入结果 id）
+            val ops = ArrayList<ContentProviderOperation>()
+            var createdGroups = 0
+            var memberAdded = 0
+            var memberSkipped = 0
+            tagToPhones.forEach { (tag, phones) ->
+                var gid = groupIdByName[tag]
+                var groupOpIdx = -1
+                if (gid == null) {
+                    groupOpIdx = ops.size
+                    ops.add(
+                        ContentProviderOperation.newInsert(ContactsContract.Groups.CONTENT_URI)
+                            .withValue(ContactsContract.Groups.ACCOUNT_TYPE, null)
+                            .withValue(ContactsContract.Groups.ACCOUNT_NAME, null)
+                            .withValue(ContactsContract.Groups.TITLE, tag)
+                            .withValue(ContactsContract.Groups.GROUP_VISIBLE, 1)
+                            .build()
+                    )
+                    gid = -1L // 占位：后续用 backref
+                    createdGroups++
+                }
+                phones.forEach { phone ->
+                    val contactId = phoneToContactId[phone] ?: return@forEach
+                    val rawId = contactIdToRaw[contactId] ?: return@forEach
+                    if (gid >= 0) {
+                        val key = "$gid:$rawId"
+                        if (key in existingMembership) { memberSkipped++; return@forEach }
+                    }
+                    val insert = ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                        .withValue(ContactsContract.Data.RAW_CONTACT_ID, rawId)
+                        .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE)
+                    if (gid >= 0) {
+                        insert.withValue(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, gid)
+                    } else {
+                        insert.withValueBackReference(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupOpIdx)
+                    }
+                    ops.add(insert.build())
+                    memberAdded++
+                }
+            }
+            if (ops.isNotEmpty()) {
+                runCatching { resolver.applyBatch(ContactsContract.AUTHORITY, ops) }
+                    .onFailure { t ->
+                        _status.value = IOStatus(message = "分组同步失败：${t.message ?: t.javaClass.simpleName}")
+                        return@withContext
+                    }
+            }
+            _status.value = IOStatus(
+                message = "标签已同步到通讯录分组",
+                syncSummary = "新建分组 $createdGroups 个，加入成员 $memberAdded 条（跳过已存在 $memberSkipped 条）。增量模式，不删除任何既有数据；可在系统通讯录的对应分组中圈选群发。"
             )
         }
     }
@@ -597,7 +735,14 @@ class ImportExportViewModel @Inject constructor(
             val newIds = mutableListOf<Long>()
             val localByExtId = HashMap<String, Long>()
             repo.getAll().forEach { c -> if (c.id > 0L) localByExtId["tma-${c.id}"] = c.id }
-            contacts.forEach { wb ->
+            // 分批处理联系人，按批上报进度（用户可见：第 N/M 批、已处理多少）
+            val contactChunks = contacts.chunked(200)
+            contactChunks.forEachIndexed { ci, chunk ->
+                progress(
+                    0.15f + 0.48f * ci / contactChunks.size.coerceAtLeast(1),
+                    "知行同步：写入联系人 ${(ci * 200 + chunk.size).coerceAtMost(contacts.size)}/${contacts.size}…"
+                )
+                chunk.forEach { wb ->
                 val phoneN = Formatter.normalizePhone(wb.phone)
                 if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) return@forEach
                 val extLocalId = wb.externalId?.let { localByExtId[it] }
@@ -661,8 +806,10 @@ class ImportExportViewModel @Inject constructor(
                     val tagNames = wb.tags.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }
                     if (tagNames.isNotEmpty()) repo.applyTags(id, tagNames)
                 }
+                }
             }
             // 4) 拉取线上跟进历史并导入（按 contactId → 本地 wbContactId 匹配，去重）
+            progress(0.7f, "知行同步：拉取跟进历史…")
             var followupsImported = 0
             when (val fr = wbApi.fetchAllFollowups()) {
                 is WbResult.Error -> {
@@ -676,9 +823,13 @@ class ImportExportViewModel @Inject constructor(
                     followupsImported = importRemoteFollowups(fr.data)
                 }
             }
+            // 5) 拉取线上短信并导入
+            progress(0.8f, "知行同步：拉取云端短信…")
+            val smsImported = importRemoteSms()
+            progress(0.95f, "知行同步：完成汇总…")
             _status.value = IOStatus(
                 message = "知行同步完成",
-                syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，跟进记录 $followupsImported 条，备份：$backup"
+                syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，跟进记录 $followupsImported 条，短信 $smsImported 条，备份：$backup"
             )
         }
     }
@@ -692,7 +843,7 @@ class ImportExportViewModel @Inject constructor(
             }
             // 1) 先备份本地
             val backup = backupToDownloads()
-            _status.value = IOStatus(running = true, message = "知行同步：拉取线上数据…")
+            progress(0.05f, "知行同步：备份完成，拉取线上数据…")
             // 2) 拉取线上联系人（phone → id 索引）与标签（name → id 索引）
             val remoteByPhone = HashMap<String, WbContact>()
             when (val r = wbApi.fetchAllContacts()) {
@@ -705,6 +856,7 @@ class ImportExportViewModel @Inject constructor(
                     if (n.isNotBlank()) remoteByPhone[n] = it
                 }
             }
+            progress(0.12f, "知行同步：拉取线上标签…")
             val tagIdByName = HashMap<String, String>()
             when (val r = wbApi.fetchAllTags()) {
                 is WbResult.Error -> {
@@ -731,10 +883,16 @@ class ImportExportViewModel @Inject constructor(
                     }
                 }
             }
-            if (createdTags > 0) _status.value = IOStatus(
-                running = true,
-                message = "已自动创建 $createdTags 个本地标签到知行朋友圈…"
-            )
+            if (createdTags > 0) progress(0.18f, "已自动创建 $createdTags 个本地标签到知行朋友圈…")
+            // 3.6) 同步前检查云端最近批次状态（数据可追溯规范）
+            //     上次批次被回滚（reverted）说明云端已撤销该批数据，警告用户避免盲推
+            var batchWarn = ""
+            when (val bs = wbApi.fetchLatestBatchStatus()) {
+                is WbResult.Success -> if (bs.data == "reverted") {
+                    batchWarn = "⚠ 云端最近一次批次已被回滚，本次同步仍会执行，请留意云端数据"
+                }
+                is WbResult.Error -> { /* 接口不可用不阻塞同步 */ }
+            }
             // 3) 按同步模式导出联系人（新建走批量 /contacts/batch，externalId 幂等；更新走单条 PUT）
             val mode = syncMode()
             var created = 0
@@ -768,8 +926,13 @@ class ImportExportViewModel @Inject constructor(
                 }
             }
             // 批量新建：≤100/批，externalId 幂等，逐条失败不阻塞
-            toCreate.chunked(100).forEach { chunk ->
-                when (val r = wbApi.createContactsBatch(chunk.map { it.second })) {
+            val createChunks = toCreate.chunked(100)
+            createChunks.forEachIndexed { ci, chunk ->
+                progress(
+                    0.2f + 0.48f * ci / createChunks.size.coerceAtLeast(1),
+                    "知行同步：上传联系人 ${(ci * 100 + chunk.size).coerceAtMost(toCreate.size)}/${toCreate.size}…"
+                )
+                when (val r = wbApi.createContactsBatch(chunk.map { it.second }, batchMeta())) {
                     is WbResult.Success -> {
                         r.data.items.forEachIndexed { i, item ->
                             val local = chunk.getOrNull(i)?.first ?: return@forEachIndexed
@@ -784,6 +947,7 @@ class ImportExportViewModel @Inject constructor(
                 }
             }
             // 更新已有联系人（单条 PUT，线上无批量更新接口）
+            progress(0.7f, "知行同步：更新已有联系人 ${toUpdate.size} 条…")
             toUpdate.forEach { (c, wb, remoteId) ->
                 try {
                     if (wbApi.updateContact(remoteId, wb) is WbResult.Success) {
@@ -824,8 +988,12 @@ class ImportExportViewModel @Inject constructor(
                     )
                 )
             }
-            fuToPush.chunked(100).forEach { chunk ->
-                when (val r = wbApi.createFollowupsBatch(chunk)) {
+            fuToPush.chunked(100).forEachIndexed { fi, chunk ->
+                progress(
+                    0.72f + 0.16f * fi / fuToPush.chunked(100).size.coerceAtLeast(1),
+                    "知行同步：推送跟进记录 ${(fi * 100 + chunk.size).coerceAtMost(fuToPush.size)}/${fuToPush.size}…"
+                )
+                when (val r = wbApi.createFollowupsBatch(chunk, batchMeta())) {
                     is WbResult.Success -> {
                         pushed += chunk.size - r.data.errors.count { it.index in chunk.indices }
                         fuFailed += r.data.errors.count { it.index in chunk.indices }
@@ -833,9 +1001,15 @@ class ImportExportViewModel @Inject constructor(
                     is WbResult.Error -> fuFailed += chunk.size
                 }
             }
+            progress(0.92f, "知行同步：完成汇总…")
             _status.value = IOStatus(
                 message = "知行同步完成",
-                syncSummary = "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone），跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}，备份：$backup"
+                syncSummary = listOfNotNull(
+                    batchWarn.takeIf { it.isNotEmpty() },
+                    "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone）",
+                    "跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}",
+                    "备份：$backup"
+                ).joinToString("\n")
             )
         }
     }
@@ -890,7 +1064,9 @@ class ImportExportViewModel @Inject constructor(
         withContext(Dispatchers.IO) {
             // 双保险：先快照当前状态
             val safety = snapshot.snapshotToDownloads()
-            val err = snapshot.restoreFrom(uri)
+            val err = snapshot.restoreFrom(uri) { p ->
+                progress(0.1f + 0.85f * p, "时光机恢复中…（解析 → 写入客户 → 跟进/标签/短信/扩展字段）")
+            }
             _status.value = if (err == null) {
                 IOStatus(
                     message = "恢复完成",
@@ -1031,52 +1207,52 @@ class ImportExportViewModel @Inject constructor(
                     return@withContext
                 }
             }
-            val messages = when (val r = wbApi.fetchAllMessages()) {
-                is WbResult.Error -> {
-                    _status.value = IOStatus(message = "云端短信接口不可用：${r.message}")
-                    return@withContext
-                }
-                is WbResult.Success -> r.data
-            }
-            if (messages.isEmpty()) {
-                _status.value = IOStatus(message = "云端没有短信记录")
-                return@withContext
-            }
-            // 客户映射：优先 wbContactId，其次号码
-            val customerByWbId = HashMap<String, Customer>()
-            val customerByPhone = HashMap<String, Customer>()
-            repo.getAll().forEach { c ->
-                if (!c.wbContactId.isNullOrBlank()) customerByWbId[c.wbContactId] = c
-                if (c.phoneNormalized.isNotBlank()) customerByPhone[c.phoneNormalized] = c
-            }
-            var imported = 0
-            var skipped = 0
-            val toInsert = mutableListOf<com.realtor.geeksales.data.db.SmsMessage>()
-            messages.forEach { m ->
-                if (m.id.isBlank()) return@forEach
-                if (repo.smsByWbId(m.id) != null) { skipped++; return@forEach }
-                val local = m.contactId?.let { customerByWbId[it] }
-                    ?: customerByPhone[Formatter.normalizePhone(m.phone)]
-                toInsert.add(
-                    com.realtor.geeksales.data.db.SmsMessage(
-                        customerId = local?.id ?: 0L,
-                        phone = m.phone,
-                        body = m.body,
-                        direction = m.direction,
-                        messageDate = Formatter.dayToEpoch(m.messageDate?.take(10))
-                            ?: System.currentTimeMillis(),
-                        wbMessageId = m.id
-                    )
-                )
-                imported++
-                if (imported % 500 == 0) kotlinx.coroutines.yield()
-            }
-            if (toInsert.isNotEmpty()) repo.insertSms(toInsert)
+            val imported = importRemoteSms()
             _status.value = IOStatus(
-                message = "云端短信拉取完成：$imported 条（跳过重复 $skipped）",
+                message = "云端短信拉取完成：$imported 条",
                 syncSummary = "已存入本地短信表，可在客户详情页查看"
             )
         }
+    }
+
+    /** 拉取线上短信并写入本地，返回导入条数；失败/为空返回 0（供主同步复用，不中断主流程） */
+    private suspend fun importRemoteSms(): Int = withContext(Dispatchers.IO) {
+        val messages = when (val r = wbApi.fetchAllMessages()) {
+            is WbResult.Error -> return@withContext 0
+            is WbResult.Success -> r.data
+        }
+        if (messages.isEmpty()) return@withContext 0
+        // 客户映射：优先 wbContactId，其次号码
+        val customerByWbId = HashMap<String, Customer>()
+        val customerByPhone = HashMap<String, Customer>()
+        repo.getAll().forEach { c ->
+            if (!c.wbContactId.isNullOrBlank()) customerByWbId[c.wbContactId] = c
+            if (c.phoneNormalized.isNotBlank()) customerByPhone[c.phoneNormalized] = c
+        }
+        var imported = 0
+        var skipped = 0
+        val toInsert = mutableListOf<com.realtor.geeksales.data.db.SmsMessage>()
+        messages.forEach { m ->
+            if (m.id.isBlank()) return@forEach
+            if (repo.smsByWbId(m.id) != null) { skipped++; return@forEach }
+            val local = m.contactId?.let { customerByWbId[it] }
+                ?: customerByPhone[Formatter.normalizePhone(m.phone)]
+            toInsert.add(
+                com.realtor.geeksales.data.db.SmsMessage(
+                    customerId = local?.id ?: 0L,
+                    phone = m.phone,
+                    body = m.body,
+                    direction = m.direction,
+                    messageDate = Formatter.dayToEpoch(m.messageDate?.take(10))
+                        ?: System.currentTimeMillis(),
+                    wbMessageId = m.id
+                )
+            )
+            imported++
+            if (imported % 500 == 0) kotlinx.coroutines.yield()
+        }
+        if (toInsert.isNotEmpty()) repo.insertSms(toInsert)
+        imported
     }
 
     // ---- 字段映射（以线上为准）----
@@ -1251,5 +1427,21 @@ class ImportExportViewModel @Inject constructor(
                     _status.value = IOStatus(message = "失败：${t.message ?: t.javaClass.simpleName}")
                 }
         }
+    }
+
+    /** 上报确定性进度（0..1），UI 显示进度条 + 百分比 */
+    private fun progress(p: Float, msg: String) {
+        _status.value = IOStatus(running = true, message = msg, progress = p.coerceIn(0f, 1f))
+    }
+
+    /** 云端「数据可追溯·批次」元信息：TMA同步 <日期时间> / source=tma / 设备与版本 */
+    private fun batchMeta(): com.realtor.geeksales.data.remote.WbBatchMeta {
+        val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        return com.realtor.geeksales.data.remote.WbBatchMeta(
+            batchName = "TMA同步 $now",
+            source = "tma",
+            deviceInfo = "TMA ${com.realtor.geeksales.BuildConfig.VERSION_NAME} / Android ${android.os.Build.VERSION.RELEASE}"
+        )
     }
 }

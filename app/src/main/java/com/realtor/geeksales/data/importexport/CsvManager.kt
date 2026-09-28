@@ -57,7 +57,7 @@ class CsvManager @Inject constructor(
         return m?.groupValues?.get(1)?.trim() ?: h.trim()
     }
 
-    suspend fun importFrom(uri: Uri): ImportReport = withContext(Dispatchers.IO) {
+    suspend fun importFrom(uri: Uri, onProgress: (Float) -> Unit = {}): ImportReport = withContext(Dispatchers.IO) {
         var total = 0
         var ok = 0
         var dup = 0
@@ -67,6 +67,7 @@ class CsvManager @Inject constructor(
                 val reader = CSVReaderBuilder(InputStreamReader(ins, Charsets.UTF_8)).build()
                 // 手动读表头：内置列固定在前，其后为扩展字段列（label(key)）
                 val header = reader.readNext() ?: return@use
+                onProgress(0.1f)
                 val extKeys = (BUILTIN_COLS until header.size).map { header[it].trim() }
                     .map { headerToKey(it) }
                     .filter { it.isNotBlank() && it !in com.realtor.geeksales.data.schema.BuiltinKeys.ALL }
@@ -77,6 +78,7 @@ class CsvManager @Inject constructor(
                 while (reader.readNext().also { row = it } != null) {
                     val cells = row!!
                     total++
+                    if (total % 2000 == 0) { onProgress(0.1f + 0.38f * total / (total + 2000)); kotlinx.coroutines.yield() }
                     val name = cells.getOrNull(0).orEmpty().trim()
                     val phone = cells.getOrNull(1).orEmpty().trim()
                     if (name.isBlank() || !Formatter.isValidCnPhone(phone)) {
@@ -136,6 +138,7 @@ class CsvManager @Inject constructor(
                     if (parsed.size % 500 == 0) kotlinx.coroutines.yield()
                 }
                 // 批量查重：分批查已存在号码，500条yield一次
+                onProgress(0.5f)
                 val existingPhones = HashSet<String>()
                 parsed.chunked(500).forEach { chunk ->
                     chunk.forEach { (c, _) ->
@@ -146,8 +149,11 @@ class CsvManager @Inject constructor(
                     }
                     kotlinx.coroutines.yield()
                 }
+                onProgress(0.6f)
                 val toInsert = parsed.filter { (c, _) -> c.phoneNormalized !in existingPhones }
-                toInsert.chunked(500).forEach { batch ->
+                val insertChunks = toInsert.chunked(500)
+                insertChunks.forEachIndexed { bi, batch ->
+                    onProgress(0.6f + 0.4f * bi / insertChunks.size.coerceAtLeast(1))
                     batch.forEach { (c, ext) ->
                         val id = repo.upsert(c)
                         if (id > 0) {
@@ -157,6 +163,7 @@ class CsvManager @Inject constructor(
                     }
                     kotlinx.coroutines.yield()
                 }
+                onProgress(1f)
             }
         }.getOrElse { t ->
             return@withContext ImportReport(error = t.message ?: t.javaClass.simpleName)

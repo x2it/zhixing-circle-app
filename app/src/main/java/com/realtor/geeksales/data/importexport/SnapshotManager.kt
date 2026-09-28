@@ -136,13 +136,14 @@ class SnapshotManager @Inject constructor(
      * 从快照文件恢复（覆盖模式）：清空本地后重建。
      * 返回 null = 成功；否则返回错误信息。
      */
-    suspend fun restoreFrom(uri: Uri): String? = withContext(Dispatchers.IO) {
+    suspend fun restoreFrom(uri: Uri, onProgress: (Float) -> Unit = {}): String? = withContext(Dispatchers.IO) {
         val tmp = File(ctx.cacheDir, "restore_${System.currentTimeMillis()}.xlsx")
         runCatching {
             ctx.contentResolver.openInputStream(uri)?.use { ins ->
                 tmp.outputStream().use { os -> ins.copyTo(os) }
             }
             if (!tmp.exists() || tmp.length() == 0L) return@withContext "备份文件为空或无法读取"
+            onProgress(0.1f)
             FileInputStream(tmp).use { fis ->
                 val wb = XSSFWorkbook(fis)
                 // 1) 解析客户
@@ -150,6 +151,7 @@ class SnapshotManager @Inject constructor(
                     ?: return@use "快照中缺少「客户」表"
                 val customers = parseCustomers(customersSheet)
                 if (customers.isEmpty()) return@use "快照中没有客户数据"
+                onProgress(0.25f)
                 // 2) 解析跟进 / 标签 / 短信 / 扩展字段（均以客户手机号为关联键）
                 val fuRows = parseSheetRows(wb.getSheet(SHEET_FOLLOWUPS))
                 val tagRows = parseSheetRows(wb.getSheet(SHEET_TAGS))
@@ -162,7 +164,9 @@ class SnapshotManager @Inject constructor(
                 repo.clearAllSms()
                 repo.clearAllExtFields()
                 val newIdByPhone = HashMap<String, Long>()
-                customers.chunked(500).forEach { batch ->
+                val custChunks = customers.chunked(500)
+                custChunks.forEachIndexed { ci, batch ->
+                    onProgress(0.3f + 0.4f * ci / custChunks.size.coerceAtLeast(1))
                     val ids = repo.upsertAll(batch)
                     batch.forEachIndexed { i, c ->
                         if (c.phoneNormalized.isNotBlank()) newIdByPhone[c.phoneNormalized] = ids[i]
@@ -170,6 +174,7 @@ class SnapshotManager @Inject constructor(
                     kotlinx.coroutines.yield()
                 }
                 // 跟进
+                onProgress(0.72f)
                 var fuCount = 0
                 fuRows.forEach { r ->
                     val phone = r.getOrNull(0).orEmpty()
@@ -183,9 +188,10 @@ class SnapshotManager @Inject constructor(
                         listOf(FollowUp(customerId = cid, result = result, durationSec = dur, note = note, remindAt = remind, fromPostCall = false, createdAt = createdAt))
                     )
                     fuCount++
-                    if (fuCount % 500 == 0) kotlinx.coroutines.yield()
+                    if (fuCount % 500 == 0) { onProgress(0.72f + 0.1f * fuCount / (fuRows.size.coerceAtLeast(1))); kotlinx.coroutines.yield() }
                 }
                 // 标签
+                onProgress(0.85f)
                 var tagCount = 0
                 tagRows.forEach { r ->
                     val name = r.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@forEach
@@ -218,6 +224,7 @@ class SnapshotManager @Inject constructor(
                 }
                 if (smsToInsert.isNotEmpty()) repo.insertSms(smsToInsert)
                 // 扩展字段
+                onProgress(0.93f)
                 var extCount = 0
                 val extByPhone = HashMap<String, MutableList<Pair<String, String>>>()
                 extRows.forEach { r ->
@@ -231,6 +238,7 @@ class SnapshotManager @Inject constructor(
                     val cid = newIdByPhone[phone] ?: return@forEach
                     repo.putExtFields(cid, pairs.toMap())
                 }
+                onProgress(1f)
                 null
             } ?: "快照解析失败"
         }.getOrElse { t ->

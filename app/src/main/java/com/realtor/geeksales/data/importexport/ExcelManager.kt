@@ -40,7 +40,7 @@ class ExcelManager @Inject constructor(
         return m?.groupValues?.get(1)?.trim() ?: h.trim()
     }
 
-    suspend fun importFrom(uri: Uri): ImportReport = withContext(Dispatchers.IO) {
+    suspend fun importFrom(uri: Uri, onProgress: (Float) -> Unit = {}): ImportReport = withContext(Dispatchers.IO) {
         var total = 0; var ok = 0; var dup = 0; var invalid = 0
         // Copy to a temp file to allow POI to random-access
         val tmp = File(ctx.cacheDir, "import_${System.currentTimeMillis()}.xlsx")
@@ -48,9 +48,11 @@ class ExcelManager @Inject constructor(
             ctx.contentResolver.openInputStream(uri)?.use { ins ->
                 tmp.outputStream().use { os -> ins.copyTo(os) }
             }
+            onProgress(0.08f)
             FileInputStream(tmp).use { fis ->
                 val wb = XSSFWorkbook(fis)
                 val sheet = wb.getSheetAt(0) ?: return@use
+                val totalRows = sheet.lastRowNum.toFloat()
                 val rows = sheet.iterator()
                 val headerRow = if (rows.hasNext()) rows.next() else null
                 // 扩展列 key（表头 BUILTIN_COLS 之后，label(key) 格式）
@@ -64,6 +66,7 @@ class ExcelManager @Inject constructor(
                 while (rows.hasNext()) {
                     val row = rows.next()
                     total++
+                    if (totalRows > 0 && total % 500 == 0) onProgress(0.08f + 0.4f * total / totalRows)
                     val name = row.getCell(0)?.str()?.trim().orEmpty()
                     val phone = row.getCell(1)?.str()?.trim().orEmpty()
                     if (name.isBlank() || !Formatter.isValidCnPhone(phone)) { invalid++; continue }
@@ -106,6 +109,7 @@ class ExcelManager @Inject constructor(
                 }
                 runCatching { wb.close() }
                 // 批量查重：分批查已存在号码
+                onProgress(0.52f)
                 val existingPhones = HashSet<String>()
                 parsed.chunked(500).forEach { chunk ->
                     chunk.forEach { (c, _) ->
@@ -116,8 +120,11 @@ class ExcelManager @Inject constructor(
                     }
                     Thread.yield()
                 }
+                onProgress(0.6f)
                 val toInsert = parsed.filter { (c, _) -> c.phoneNormalized !in existingPhones }
-                toInsert.chunked(500).forEach { batch ->
+                val insertChunks = toInsert.chunked(500)
+                insertChunks.forEachIndexed { bi, batch ->
+                    onProgress(0.6f + 0.4f * bi / insertChunks.size.coerceAtLeast(1))
                     batch.forEach { (c, ext) ->
                         val id = repo.upsert(c)
                         if (id > 0) {
@@ -127,6 +134,7 @@ class ExcelManager @Inject constructor(
                     }
                     Thread.yield()
                 }
+                onProgress(1f)
             }
         }.getOrElse { t ->
             runCatching { tmp.delete() }

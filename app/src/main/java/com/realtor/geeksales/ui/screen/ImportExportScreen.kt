@@ -74,7 +74,7 @@ fun ImportExportScreen(
         }
     }
     var exportPending by remember { mutableStateOf(false) }
-
+    var groupPending by remember { mutableStateOf(false) }
     // API Key 输入状态
     var apiKeyInput by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -114,6 +114,7 @@ fun ImportExportScreen(
         if (granted) {
             when {
                 exportPending -> vm.exportContacts()
+                groupPending -> vm.syncGroupsFromTags()
                 else -> vm.importContacts()
             }
         }
@@ -144,7 +145,25 @@ fun ImportExportScreen(
         ) {
             if (status.running) {
                 GeekCard(Modifier.fillMaxWidth()) {
-                    LoadingState(message = status.message)
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LoadingState(message = status.message)
+                        // 确定性进度（同步/导入导出/快照逐步上报 0..1）
+                        val p = status.progress
+                        if (p != null) {
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { p },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Accent,
+                                trackColor = Divider
+                            )
+                            Text(
+                                "进度 ${(p * 100).toInt()}%",
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.align(Alignment.End)
+                            )
+                        }
+                    }
                 }
             }
             val busy = status.running
@@ -372,10 +391,18 @@ fun ImportExportScreen(
                     GeekGhostButton(if (busy) "处理中…" else "导出到通讯录", color = if (busy) TextMuted else Accent, onClick = {
                         if (busy) return@GeekGhostButton
                         exportPending = true
+                        groupPending = false
                         permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
                     })
                     GeekGhostButton("下载导入模板", color = if (busy) TextMuted else Warning, onClick = { if (!busy) createTemplate.launch("tma_template.xlsx") })
                 }
+                // 标签 → 通讯录分组（云端 v2.0：按标签建系统分组，便于圈选群发）
+                GeekGhostButton(if (busy) "处理中…" else "标签 → 通讯录分组", color = if (busy) TextMuted else Accent, onClick = {
+                    if (busy) return@GeekGhostButton
+                    exportPending = false
+                    groupPending = true
+                    permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
+                })
             }
 
             // ================= 执行状态 =================
@@ -387,6 +414,23 @@ fun ImportExportScreen(
                 }
                 if (status.message.isNotEmpty()) {
                     Text(status.message, color = c, style = MaterialTheme.typography.bodyMedium)
+                }
+                // 执行状态卡同步展示确定性进度（与顶部卡片一致）
+                val p = status.progress
+                if (status.running && p != null) {
+                    Spacer(Modifier.height(6.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { p },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Accent,
+                        trackColor = Divider
+                    )
+                    Text(
+                        "进度 ${(p * 100).toInt()}%",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.align(Alignment.End)
+                    )
                 }
                 status.report?.let { r ->
                     if (r.error == null) {

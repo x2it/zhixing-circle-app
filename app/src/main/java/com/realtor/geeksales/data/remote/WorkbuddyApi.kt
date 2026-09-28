@@ -71,6 +71,13 @@ data class WbBatchResponse(
     val created: Int = 0
 )
 
+/** 批次信息（云端「数据可追溯·时光机」规范）：每次批量同步上报 batchName/source/deviceInfo */
+data class WbBatchMeta(
+    val batchName: String = "",
+    val source: String = "tma",
+    val deviceInfo: String = ""
+)
+
 @Serializable
 data class WbTag(
     val id: String = "",
@@ -394,12 +401,20 @@ class WorkbuddyApi @Inject constructor(
      * 批量上传联系人（POST /api/contacts/batch）。
      * 单次 ≤100 条；externalId 幂等（同 externalId 重复上传直接返回已存在对象）；
      * 逐条独立处理，失败明细在 errors 中，不影响其余。
+     * batchMeta 为云端「数据可追溯（批次）」规范：batchName/source/deviceInfo。
      */
-    suspend fun createContactsBatch(items: List<WbContact>): WbResult<WbBatchResponse> =
+    suspend fun createContactsBatch(items: List<WbContact>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
             if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
-            val body = "{\"items\":[" + items.joinToString(",") { buildContactJson(it) } + "]}"
+            val body = buildString {
+                append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
+                append("\"source\":\"${esc(batchMeta.source)}\",")
+                append("\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\",")
+                append("\"items\":[")
+                append(items.joinToString(",") { buildContactJson(it) })
+                append("]}")
+            }
             val resp = post("/contacts/batch", body)
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
@@ -408,12 +423,19 @@ class WorkbuddyApi @Inject constructor(
                 .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
         }
 
-    /** 批量上传跟进记录（POST /api/followups/batch），≤100 条/批 */
-    suspend fun createFollowupsBatch(items: List<WbFollowup>): WbResult<WbBatchResponse> =
+    /** 批量上传跟进记录（POST /api/followups/batch），≤100 条/批；带批次信息 */
+    suspend fun createFollowupsBatch(items: List<WbFollowup>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
             if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
-            val body = "{\"items\":[" + items.joinToString(",") { buildFollowupJson(it) } + "]}"
+            val body = buildString {
+                append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
+                append("\"source\":\"${esc(batchMeta.source)}\",")
+                append("\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\",")
+                append("\"items\":[")
+                append(items.joinToString(",") { buildFollowupJson(it) })
+                append("]}")
+            }
             val resp = post("/followups/batch", body)
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
@@ -421,6 +443,26 @@ class WorkbuddyApi @Inject constructor(
                 .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
                 .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
         }
+
+    /**
+     * 查询最近一次批次状态（GET /api/batches?limit=1）。
+     * 返回 status（active / reverted / …）；无批次或接口不可用时返回 null。
+     * 同步前检查：若上次批次被回滚（reverted），云端已撤销该批数据，不应立刻把本地数据再推回去。
+     */
+    suspend fun fetchLatestBatchStatus(): WbResult<String?> = withContext(Dispatchers.IO) {
+        val body = get("/batches?limit=1")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        val status: String? = runCatching {
+            val el = json.parseToJsonElement(body)
+            val arr: JsonArray? = when (el) {
+                is JsonArray -> el
+                is JsonObject -> el["items"] as? JsonArray ?: el["batches"] as? JsonArray
+                else -> null
+            }
+            arr?.firstOrNull()?.jsonObject?.get("status")?.jsonPrimitive?.content
+        }.getOrNull()
+        WbResult.Success(status)
+    }
 
     // ---- 底层 HTTP ----
     private fun buildContactJson(c: WbContact): String {
