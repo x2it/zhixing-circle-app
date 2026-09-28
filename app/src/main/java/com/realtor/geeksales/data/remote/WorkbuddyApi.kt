@@ -465,48 +465,46 @@ class WorkbuddyApi @Inject constructor(
         append("}")
     }
 
-    /** 拉取线上模板：字段定义 + 分层 tiers + 身份/属性标签（GET /api/schema） */
+    /**
+     * 拉取线上模板：分层 tiers + 语义 + 身份/属性标签（GET /api/templates）。
+     * 线上返回模板数组（房产/保险/微商/社交等），默认取房产模板 preset-real-estate；
+     * 模板换行业时在此切换（后续可在数据页提供模板选择器）。
+     */
     suspend fun fetchSchema(): WbResult<WbSchemaBundle> = withContext(Dispatchers.IO) {
-        val body = get("/schema")
+        val body = get("/templates")
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
-        val root = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
-        val arr = runCatching {
-            when (val el = json.parseToJsonElement(body)) {
-                is JsonArray -> el
-                is JsonObject -> el["items"] as? JsonArray ?: el["fields"] as? JsonArray ?: JsonArray(emptyList())
-                else -> JsonArray(emptyList())
-            }
-        }.getOrNull() ?: JsonArray(emptyList())
-        val list = arr.mapNotNull { el ->
-            runCatching {
-                val o = el.jsonObject
-                WbRemoteField(
-                    key = o["key"]?.jsonPrimitive?.content.orEmpty(),
-                    label = o["label"]?.jsonPrimitive?.content.orEmpty(),
-                    type = o["type"]?.jsonPrimitive?.content.orEmpty(),
-                    group = o["group"]?.jsonPrimitive?.content,
-                    required = o["required"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
-                    options = (o["options"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty(),
-                    order = o["order"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-                )
-            }.getOrNull()
-        }.filter { it.key.isNotBlank() }
+        val arr = runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull()
+            ?: return@withContext WbResult.Error("模板响应解析失败（请确认线上已开放 /api/templates）")
+        // 优先房产模板；不存在则取第一个
+        val target = arr.firstOrNull {
+            (it as? JsonObject)?.get("id")?.jsonPrimitive?.content == "preset-real-estate"
+        } ?: arr.firstOrNull() ?: return@withContext WbResult.Success(WbSchemaBundle())
+        val o = target.jsonObject
         fun strList(k: String): List<String> =
-            (root?.get(k) as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
-        // 分层中文语义（tierLabels: {"S":"成交高价值",...}），模板可覆盖
-        val tierLabels = runCatching {
-            (root?.get("tierLabels") as? JsonObject)?.let { obj ->
-                obj.keys.mapNotNull { k ->
-                    (obj[k]?.jsonPrimitive?.content)?.takeIf { it.isNotBlank() }?.let { k to it }
-                }.toMap()
+            (o.get(k) as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
+        // 线上 tiers 为对象数组 [{value,label,description,color}]：取 value 列表 + description 语义
+        val tiersArr = (o.get("tiers") as? JsonArray)?.mapNotNull { el ->
+            runCatching {
+                val jo = el.jsonObject
+                val v = jo["value"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return@runCatching null
+                val desc = jo["description"]?.jsonPrimitive?.content
+                    ?: jo["label"]?.jsonPrimitive?.content ?: v
+                v to desc
+            }.getOrNull()
+        }.orEmpty()
+        val tiers = tiersArr.map { it.first }
+        val tierLabels = tiersArr.filter { it.second.isNotBlank() }.toMap()
+        // 线上标签为对象数组 [{name,color}]：取 name
+        fun tagList(k: String): List<String> =
+            (o.get(k) as? JsonArray)?.mapNotNull { el ->
+                (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             }.orEmpty()
-        }.getOrDefault(emptyMap())
         WbResult.Success(
             WbSchemaBundle(
-                fields = list,
-                tiers = strList("tiers").ifEmpty { strList("levels") }.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
-                identityTags = strList("identityTags"),
-                attributeTags = strList("attributeTags"),
+                fields = emptyList(),
+                tiers = tiers.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
+                identityTags = tagList("identityTags"),
+                attributeTags = tagList("attributeTags"),
                 tierLabels = tierLabels
             )
         )

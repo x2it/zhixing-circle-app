@@ -172,7 +172,7 @@ class SchemaStore @Inject constructor(
         FieldDef(BuiltinKeys.BUDGET_MAX, "预算上限(万)", "number", "购房需求", order = 22),
         FieldDef(BuiltinKeys.HOUSE_TYPE, "房型偏好", "text", "购房需求", order = 23),
         FieldDef(BuiltinKeys.TARGET_PROJECT, "意向楼盘", "text", "购房需求", order = 24),
-        FieldDef(BuiltinKeys.INTENT_LEVEL, "意向等级", "select", "意向与跟进", options = listOf("A", "B", "C", "D", "U"), order = 30),
+        FieldDef(BuiltinKeys.INTENT_LEVEL, "意向等级", "select", "意向与跟进", options = listOf("S", "A", "B", "C", "D", "V", "U"), order = 30),
         FieldDef(BuiltinKeys.NEXT_FOLLOW_AT, "下次跟进", "date", "意向与跟进", order = 31),
         FieldDef(BuiltinKeys.NOTE, "备注", "textarea", "意向与跟进", order = 32)
     )
