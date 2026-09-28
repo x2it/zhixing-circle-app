@@ -678,6 +678,25 @@ class ImportExportViewModel @Inject constructor(
     fun saveApiKey(key: String): Boolean = apiKeyStore.save(key.trim())
     fun clearApiKey() = apiKeyStore.clear()
 
+    /** 一键检测 API Key：轻量探测线上接口，立即区分“密钥无效/撤销”与“网络问题”，不用点同步才知道 */
+    fun verifyApiKey() {
+        viewModelScope.launch {
+            _status.value = IOStatus(message = "正在验证 API Key…", isError = false, syncSummary = "正在请求云端…")
+            when (val r = wbApi.verifyKey()) {
+                is WbResult.Success -> _status.value = IOStatus(
+                    message = "API Key 验证通过",
+                    isError = false,
+                    syncSummary = "密钥有效，可正常同步"
+                )
+                is WbResult.Error -> _status.value = IOStatus(
+                    message = "API Key 验证失败",
+                    isError = true,
+                    syncSummary = r.message
+                )
+            }
+        }
+    }
+
     // ---- 同步模式（prefs 持久化）----
     private val prefs = ctx.getSharedPreferences("tma_prefs", Context.MODE_PRIVATE)
 

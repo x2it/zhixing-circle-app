@@ -282,6 +282,7 @@ fun ImportExportScreen(
                     if (hasKey) {
                         GeekGhostButton("清除密钥", color = if (busy) TextMuted else Danger, onClick = { if (!busy) { vm.clearApiKey(); GlobalToast.showSuccess("密钥已清除") } })
                     }
+                    GeekGhostButton("检测密钥", color = if (busy || !hasKey) TextMuted else Success, onClick = { if (!busy && hasKey) vm.verifyApiKey() })
                 }
                 // 同步模式
                 Spacer(Modifier.height(4.dp))

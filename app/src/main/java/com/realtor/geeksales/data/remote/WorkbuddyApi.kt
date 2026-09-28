@@ -704,6 +704,13 @@ class WorkbuddyApi @Inject constructor(
         }
     }
 
+    /** 密钥连通性检测：GET /templates 轻量探测，2xx=有效；401=已撤销/无效 */
+    suspend fun verifyKey(): WbResult<Boolean> = withContext(Dispatchers.IO) {
+        val body = get("/templates")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(body)) WbResult.Success(true) else WbResult.Error(extractError(body))
+    }
+
     private fun get(path: String): String? = request("GET", path, null)
     private fun post(path: String, body: String): String? = request("POST", path, body)
     private fun put(path: String, body: String): String? = request("PUT", path, body)
