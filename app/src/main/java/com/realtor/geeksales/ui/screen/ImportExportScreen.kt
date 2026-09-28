@@ -67,12 +67,14 @@ fun ImportExportScreen(
     var lastNotified by remember { mutableStateOf("") }
     LaunchedEffect(status) {
         val m = status.message
-        if (m.isNotEmpty() && m != lastNotified) {
-            when {
-                !status.running && status.isError -> { GlobalToast.showError(m); lastNotified = m }
-                !status.running && m.contains("完成") -> { GlobalToast.showSuccess(m); lastNotified = m }
-                !status.running && m.startsWith("失败") -> { GlobalToast.showError(m); lastNotified = m }
-            }
+        if (m.isEmpty() || m == "idle") return@LaunchedEffect
+        if (m == lastNotified) return@LaunchedEffect
+        lastNotified = m
+        // 进行中：全局顶部转圈提示（任何滚动位置都可见）；结束：明确成功/失败反馈
+        if (status.running) {
+            GlobalToast.showLoading(m)
+        } else {
+            if (status.isError) GlobalToast.showError(m) else GlobalToast.showSuccess(m)
         }
     }
     var exportPending by remember { mutableStateOf(false) }
@@ -162,25 +164,47 @@ fun ImportExportScreen(
                 .navigationBarsPadding(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (status.running) {
+            // 执行状态卡：进行中显示进度；结束后常驻显示结果（成功✓ / 失败✕），不再一闪而过
+            if (status.message.isNotEmpty() && status.message != "idle") {
+                val err = status.isError
                 GeekCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        LoadingState(message = status.message)
-                        // 确定性进度（同步/导入导出/快照逐步上报 0..1）
-                        val p = status.progress
-                        if (p != null) {
-                            androidx.compose.material3.LinearProgressIndicator(
-                                progress = { p },
-                                modifier = Modifier.fillMaxWidth(),
-                                color = Accent,
-                                trackColor = Divider
-                            )
-                            Text(
-                                "进度 ${(p * 100).toInt()}%",
-                                color = TextSecondary,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.align(Alignment.End)
-                            )
+                        if (status.running) {
+                            LoadingState(message = status.message)
+                            // 确定性进度（同步/导入导出/快照逐步上报 0..1）
+                            val p = status.progress
+                            if (p != null) {
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { p },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = Accent,
+                                    trackColor = Divider
+                                )
+                                Text(
+                                    "进度 ${(p * 100).toInt()}%",
+                                    color = TextSecondary,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.align(Alignment.End)
+                                )
+                            }
+                        } else {
+                            // 结束：成功/失败结果常驻（直到下一次操作）
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = if (err) "✕" else "✓",
+                                    color = if (err) Danger else Success,
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = status.message,
+                                    color = if (err) Danger else TextSecondary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (err) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                                )
+                            }
+                            status.syncSummary?.let {
+                                Text(it, color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
                 }

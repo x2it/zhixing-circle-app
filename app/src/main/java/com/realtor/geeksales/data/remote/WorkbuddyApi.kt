@@ -370,6 +370,40 @@ class WorkbuddyApi @Inject constructor(
         if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
     }
 
+    /**
+     * 批量推送短信（POST /api/messages/batch，单次≤100，逐条独立：单条失败不影响其余）。
+     * 与通话/联系人一致的批次语义：线上自动归入批次，可时光机回溯。
+     */
+    suspend fun createMessagesBatch(items: List<WbMessage>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        withContext(Dispatchers.IO) {
+            if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
+            val body = buildString {
+                append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
+                append("\"source\":\"${esc(batchMeta.source)}\",")
+                append("\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\",")
+                append("\"items\":[")
+                append(items.joinToString(",") { m ->
+                    buildString {
+                        append("{")
+                        if (!m.contactId.isNullOrBlank()) append("\"contactId\":\"${esc(m.contactId)}\",")
+                        append("\"phone\":\"${esc(m.phone)}\",")
+                        append("\"body\":\"${esc(m.body)}\",")
+                        append("\"direction\":\"${esc(m.direction)}\",")
+                        if (!m.messageDate.isNullOrBlank()) append("\"messageDate\":\"${esc(m.messageDate)}\",")
+                        append("}")
+                    }
+                })
+                append("]}")
+            }
+            val resp = post("/messages/batch", body)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            runCatching { json.decodeFromString<WbBatchResponse>(resp) }
+                .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
+                .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
+        }
+
     /** 查询线上短信同步开关；false 时 messages 接口会返回 403，应提示用户先在网页开启 */
     suspend fun smsSyncEnabled(): WbResult<Boolean> = withContext(Dispatchers.IO) {
         val body = get("/settings/sms-sync")
@@ -651,30 +685,23 @@ class WorkbuddyApi @Inject constructor(
 
     private fun request(method: String, path: String, body: String?): String? {
         val key = apiKeyStore.load() ?: return null
-        // 第一通道：URL 参数认证（线上官方要求：公网经平台网关时自定义请求头会被剥离，?api_key= 才可靠）
-        var resp = execute(method, path, body, key, key)
-        // 兜底：query 认证失败时试请求头（本地直连或旧版服务端）
-        if (resp != null && isAuthFailure(resp)) {
-            resp = execute(method, path, body, key, null)
-        }
-        return resp
+        // 认证只走 URL 参数（?api_key=）：线上经平台网关时自定义请求头会被剥离，
+        // 放请求头（X-API-Key / Authorization）一律 401，纯 URL 参数才可靠
+        return execute(method, path, body, key)
     }
 
-    private fun execute(method: String, path: String, body: String?, key: String, queryKey: String?): String? {
+    private fun execute(method: String, path: String, body: String?, key: String): String? {
         val sep = if (path.contains("?")) "&" else "?"
-        val url = baseUrl() + path + if (queryKey != null) "$sep" + "api_key=$queryKey" else ""
+        val url = baseUrl() + path + "$sep" + "api_key=$key"
         val b = Request.Builder()
             .url(url)
-            // 双头兼容：X-API-Key（早期约定）+ Authorization: Bearer（线上官方推荐）
-            .header("X-API-Key", key)
-            .header("Authorization", "Bearer $key")
             .header("Accept", "application/json")
             .method(method, body?.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         return runCatching {
             client.newCall(b).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    // 非 2xx：前缀标记状态码，is2xx 据此可靠识别失败
+                    // 非 2xx：前缀标记状态码，is2xx 据此可靠识别失败；extractError 给出明确语义
                     "HTTP ${resp.code}:${resp.body?.string().orEmpty().take(160)}"
                 } else {
                     resp.body?.string()
@@ -682,11 +709,6 @@ class WorkbuddyApi @Inject constructor(
             }
         }.getOrNull()
     }
-
-    /** 判断响应是否为认证失败（未登录/会话过期/UNAUTHORIZED），用于降级重试 */
-    private fun isAuthFailure(body: String): Boolean =
-        body.contains("未登录") || body.contains("会话已过期") ||
-            body.contains("UNAUTHORIZED") || body.startsWith("HTTP 401")
 
     /**
      * 判断响应是否真的是成功 JSON：
@@ -706,6 +728,23 @@ class WorkbuddyApi @Inject constructor(
     }
 
     private fun extractError(body: String): String {
+        // 非 2xx（HTTP <code>:<body> 前缀）：按状态码给出明确语义，不无脑报成功/笼统报错
+        if (body.startsWith("HTTP ")) {
+            val status = body.substring(0, body.indexOf(':'))
+            val raw = body.substringAfter(':').trim().take(160)
+            val serverMsg = runCatching {
+                val el = json.parseToJsonElement(raw)
+                (el as? JsonObject)?.get("message")?.jsonPrimitive?.content
+                    ?: (el as? JsonObject)?.get("error")?.jsonPrimitive?.content
+            }.getOrNull()
+            return when (status) {
+                "HTTP 401" -> "同步失败：API Key 无效或未授权（请检查密钥；云端按账号隔离，密钥与账号一对一）"
+                "HTTP 403" -> "同步失败：云端该功能未开启或无权访问（请在网页「API 接入」页开启对应同步开关）"
+                "HTTP 404" -> "同步失败：云端接口不存在（${serverMsg ?: "请联系云端补齐接口"}）"
+                else -> "同步失败（HTTP ${status.removePrefix("HTTP ")}）：${serverMsg?.takeIf { it.isNotBlank() } ?: raw.ifBlank { "服务端错误" }}"
+            }
+        }
+        // 2xx 但业务返回错误 JSON
         val msg = runCatching {
             val el = json.parseToJsonElement(body)
             (el as? JsonObject)?.get("message")?.jsonPrimitive?.content

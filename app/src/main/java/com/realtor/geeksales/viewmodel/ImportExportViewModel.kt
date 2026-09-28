@@ -1118,6 +1118,17 @@ class ImportExportViewModel @Inject constructor(
                 _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
                 return@withContext
             }
+            // 权限预检查：无 READ_SMS 权限直接明确报错引导，不进入"读取 0 条假成功"
+            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_SMS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(
+                    message = "未授予「短信」权限，无法读取短信",
+                    isError = true,
+                    syncSummary = "请到 系统设置 → 应用 → TMA → 权限 → 短信 开启后重试"
+                )
+                return@withContext
+            }
             // 检查线上短信同步开关；关闭时自动一键开启（PUT /api/settings/sms-sync），
             // 用户点击同步按钮即视为授权开启；开启失败才提示去网页操作
             when (val sw = wbApi.smsSyncEnabled()) {
@@ -1163,6 +1174,7 @@ class ImportExportViewModel @Inject constructor(
             var pushed = 0
             var failed = 0
             var maxId = cursor
+            val toPush = mutableListOf<WbMessage>()
             runCatching {
                 ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
                     val idI = c.getColumnIndexOrThrow("_id")
@@ -1182,28 +1194,55 @@ class ImportExportViewModel @Inject constructor(
                         if (dateLabel == null) continue
                         val key = "$phone|$body|$dateLabel"
                         if (key in remoteKeys) continue
-                        val m = WbMessage(
-                            contactId = wbIdByPhone[Formatter.normalizePhone(phone)],
-                            phone = phone,
-                            body = body,
-                            direction = if (type == 1) "in" else "out",
-                            messageDate = dateLabel
+                        toPush.add(
+                            WbMessage(
+                                contactId = wbIdByPhone[Formatter.normalizePhone(phone)],
+                                phone = phone,
+                                body = body,
+                                direction = if (type == 1) "in" else "out",
+                                messageDate = dateLabel
+                            )
                         )
-                        when (wbApi.createMessage(m)) {
-                            is WbResult.Success -> { pushed++; remoteKeys.add(key) }
-                            is WbResult.Error -> failed++
-                        }
-                        if ((pushed + failed) % 100 == 0) kotlinx.coroutines.yield()
+                        remoteKeys.add(key)
                     }
                 }
             }.onFailure { t ->
-                _status.value = IOStatus(message = "读取短信失败：${t.message ?: t.javaClass.simpleName}")
+                _status.value = IOStatus(
+                    message = "读取短信失败：${t.message ?: t.javaClass.simpleName}",
+                    isError = true,
+                    syncSummary = "请确认已授予「短信」权限：系统设置 → 应用 → TMA → 权限 → 短信"
+                )
                 return@withContext
             }
+            // 批量推送（≤100/批，线上按批次归档可时光机回溯）
+            if (toPush.isNotEmpty()) {
+                val chunks = toPush.chunked(100)
+                chunks.forEachIndexed { ci, chunk ->
+                    progress(
+                        0.1f + 0.8f * ci / chunks.size.coerceAtLeast(1),
+                        "短信同步：上传 ${(ci * 100 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
+                    )
+                    when (val r = wbApi.createMessagesBatch(chunk, batchMeta())) {
+                        is WbResult.Success -> {
+                            pushed += r.data.items.count { it.id.isNotBlank() }
+                            failed += r.data.errors.size
+                        }
+                        is WbResult.Error -> failed += chunk.size
+                    }
+                    kotlinx.coroutines.yield()
+                }
+            }
             prefs.edit().putLong("sms_sync_last_id", maxId).apply()
+            // 0 条也要说清楚：区分"已全部同步过"与"权限/数据问题"，绝不假成功
+            val msg = if (pushed == 0 && failed == 0) {
+                "未发现可同步的新短信（本机无新短信，或已全部同步过）"
+            } else {
+                "短信云端同步完成：推送 $pushed 条（失败 $failed）"
+            }
             _status.value = IOStatus(
-                message = "短信云端同步完成：推送 ${pushed} 条（失败 $failed）",
-                syncSummary = "失败原因多为线上接口未开放或限流；本地数据未受影响"
+                message = msg,
+                isError = failed > 0,
+                syncSummary = if (failed > 0) "失败 ${failed} 条（多为线上限流），本地数据未受影响；稍后重试即可" else "云端已按批次归档，可时光机回溯"
             )
         }
     }
@@ -1292,6 +1331,17 @@ class ImportExportViewModel @Inject constructor(
         withContext(Dispatchers.IO) {
             if (apiKeyStore.load().isNullOrBlank()) {
                 _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 0) 权限预检查：无 READ_CALL_LOG 直接明确报错引导，不进入"读取 0 条假成功"
+            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_CALL_LOG)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(
+                    message = "未授予「通话记录」权限，无法读取本机通话记录",
+                    isError = true,
+                    syncSummary = "请到 系统设置 → 应用 → TMA → 权限 → 电话/通话记录 开启后重试"
+                )
                 return@withContext
             }
             // 1) 云端开关：关闭时自动一键开启（用户点击同步即授权）
@@ -1396,9 +1446,15 @@ class ImportExportViewModel @Inject constructor(
                 is WbResult.Error -> { /* 拉取失败不阻塞，推送结果已汇报 */ }
             }
             progress(0.95f, "通话记录同步：完成汇总…")
+            val noNew = mirror.imported == 0 && pushed == 0 && pulled == 0
             _status.value = IOStatus(
-                message = "通话记录同步完成",
-                syncSummary = "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条"
+                message = if (noNew) "未发现新通话记录（本机无新增，或已全部同步过）" else "通话记录同步完成",
+                isError = pushFailed > 0,
+                syncSummary = if (noNew) {
+                    "本机最近无新增通话；可稍后再试，或确认「通话记录」权限已开启"
+                } else {
+                    "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条"
+                }
             )
         }
     }
