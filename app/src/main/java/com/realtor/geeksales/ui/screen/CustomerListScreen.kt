@@ -86,7 +86,7 @@ fun CustomerListScreen(
             GeekGhostButton("+ 新建", onClick = { onNav(Routes.customerEdit(0)) }, color = Accent)
         })
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            GeekTextField(q, { q = it }, placeholder = "搜：姓名 / 电话 / 楼盘 / 区域")
+            GeekTextField(q, { q = it }, placeholder = "搜：姓名 / 电话 / 备注 / 标签")
             // 分层筛选：完全跟随模板（行业可换，不写死）
             val tierMeta = vm.templateMeta.collectAsStateWithLifecycle().value
             val tierToEnum = mapOf(
@@ -208,10 +208,10 @@ private fun CustomerRow(
                 Spacer(Modifier.height(4.dp))
                 Text(c.phone, color = Accent, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!c.areaPref.isNullOrBlank()) { Text("区域 ${c.areaPref}", color = TextSecondary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false)); Spacer(Modifier.width(10.dp)) }
+                    if (!c.areaPref.isNullOrBlank()) { Text(c.areaPref, color = TextSecondary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false)); Spacer(Modifier.width(10.dp)) }
                     val b = buildString { if (c.budgetMinWan != null) append(c.budgetMinWan); if (c.budgetMinWan != null || c.budgetMaxWan != null) append("~"); if (c.budgetMaxWan != null) append(c.budgetMaxWan); if (isNotBlank()) append("万") }
-                    if (b.isNotBlank()) { Text("预算 $b", color = TextSecondary, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.width(10.dp)) }
-                    if (!c.targetProject.isNullOrBlank()) Text("楼盘 ${c.targetProject}", color = TextSecondary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    if (b.isNotBlank()) { Text(b, color = TextSecondary, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.width(10.dp)) }
+                    if (!c.targetProject.isNullOrBlank()) Text(c.targetProject, color = TextSecondary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {

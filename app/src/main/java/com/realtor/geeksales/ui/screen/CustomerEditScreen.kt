@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.realtor.geeksales.ui.screen
 
 import androidx.compose.foundation.background
@@ -176,26 +178,27 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
                 "C" to IntentLevel.C, "D" to IntentLevel.D, "V" to IntentLevel.V, "U" to IntentLevel.U
             )
             val levels = meta.tiers.mapNotNull { t -> tierToEnum[t] }
-            // 每行不超过 4 个，自动换行
-            listOf(levels.take(4), levels.drop(4)).filter { it.isNotEmpty() }.forEach { rowLevels ->
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    rowLevels.forEach { lvl ->
-                        val on = form.intentLevel == lvl
-                        val lvlColor = intentColor(lvl)
-                        androidx.compose.runtime.key(lvl) {
-                            Text(
-                                text = meta.tierLabel(lvl.name),
-                                color = if (on) lvlColor else TextSecondary,
-                                modifier = Modifier
-                                    .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)
-                                    .border(1.dp, if (on) lvlColor else Divider)
-                                    .clickable { vm.update { s -> s.copy(intentLevel = lvl) } }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1
-                            )
-                        }
+            // 自适应换行：窄屏/多层级自动折行，不固定每行数量
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                levels.forEach { lvl ->
+                    val on = form.intentLevel == lvl
+                    val lvlColor = intentColor(lvl)
+                    androidx.compose.runtime.key(lvl) {
+                        Text(
+                            text = meta.tierLabel(lvl.name),
+                            color = if (on) lvlColor else TextSecondary,
+                            modifier = Modifier
+                                .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)
+                                .border(1.dp, if (on) lvlColor else Divider)
+                                .clickable { vm.update { s -> s.copy(intentLevel = lvl) } }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1
+                        )
                     }
                 }
             }
@@ -228,7 +231,10 @@ private fun ExtField(f: FieldDef, value: String, onChange: (String) -> Unit) {
     when (f.type) {
         "select" -> {
             Text(f.label, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 f.options.forEach { opt ->
                     val on = value == opt
                     Text(
@@ -249,7 +255,10 @@ private fun ExtField(f: FieldDef, value: String, onChange: (String) -> Unit) {
         "multiselect" -> {
             Text(f.label, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
             val selected = value.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 f.options.forEach { opt ->
                     val on = opt in selected
                     Text(

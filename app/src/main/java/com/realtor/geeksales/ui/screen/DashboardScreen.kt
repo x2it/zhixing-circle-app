@@ -74,20 +74,18 @@ fun DashboardScreen(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // 统计卡 2×2 对称网格（过期跟进并入下方「今日跟进」卡内显示）
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f)) {
                     StatTile("总客户", totalCustomers.toString(), accent = Accent)
                 }
                 Box(Modifier.weight(1f)) {
-                    StatTile("今日已拨打", calledToday.toString(), accent = Success)
+                    StatTile("今日未拨打", notCalledToday.toString(), accent = Warning)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(Modifier.weight(1f)) {
-                    StatTile("今日未拨打", notCalledToday.toString(), accent = Warning)
-                }
-                Box(Modifier.weight(1f)) {
-                    StatTile("过期跟进", overdue.toString(), accent = Danger)
+                    StatTile("今日已拨打", calledToday.toString(), accent = Success)
                 }
                 Box(Modifier.weight(1f)) {
                     StatTile("今日跟进", followUpsToday.toString(), accent = Accent)
@@ -114,16 +112,33 @@ fun DashboardScreen(
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val tierMeta = vm.templateMeta.collectAsStateWithLifecycle().value
-                    Text(
-                        "分层分布（${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}）",
-                        color = Accent, style = MaterialTheme.typography.labelMedium
-                    )
+                    Text("分层分布", color = Accent, style = MaterialTheme.typography.labelMedium)
                     val tierColor = mapOf(
                         "S" to IntentS, "A" to IntentA, "B" to IntentB, "C" to IntentC,
                         "D" to IntentD, "V" to IntentV, "U" to IntentU
                     )
                     tierMeta.tiers.forEach { t ->
-                        IntentRow(tierMeta.tierBadge(t), intentMap[t] ?: 0, tierColor[t] ?: Accent, maxCount)
+                        val count = intentMap[t] ?: 0
+                        if (count > 0 || t != "U") {
+                            IntentRow(
+                                level = tierMeta.tierBadge(t),
+                                semantic = tierMeta.tierLabels[t] ?: t,
+                                count = count,
+                                color = tierColor[t] ?: Accent,
+                                maxCount = maxCount
+                            )
+                        }
+                    }
+                    // 未分类（本地状态 U，显示 /）：有未分类客户时单独成行，不再错位挂靠
+                    val unclassified = intentMap["U"] ?: 0
+                    if (unclassified > 0 && tierMeta.tiers.none { it == "U" }) {
+                        IntentRow(
+                            level = "/",
+                            semantic = "未分类",
+                            count = unclassified,
+                            color = IntentU,
+                            maxCount = maxCount
+                        )
                     }
                 }
             }
@@ -166,11 +181,39 @@ private fun FollowupRow(c: com.realtor.geeksales.data.db.Customer, tag: String, 
 }
 
 @Composable
-private fun IntentRow(level: String, count: Int, color: Color, maxCount: Int) {
-    val barWidth = (count.toFloat() / maxCount * 120f).coerceAtLeast(2f).dp
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(level, color = color, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(20.dp))
-        Box(Modifier.height(12.dp).width(barWidth).background(color))
-        Text("$count", color = TextPrimary, style = MaterialTheme.typography.titleSmall)
+private fun IntentRow(level: String, semantic: String, count: Int, color: Color, maxCount: Int) {
+    // 行头：徽标 + 语义 + 数量（两端对齐，语义弹性截断自适应）
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            level, color = color, style = MaterialTheme.typography.labelLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            modifier = Modifier.width(24.dp)
+        )
+        Text(
+            semantic, color = TextMuted, style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.weight(1f), maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+        Text("$count", color = TextPrimary, style = MaterialTheme.typography.titleSmall,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+    }
+    // 进度条：占满整行宽度（count/max 比例自适应，不写死像素宽）
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(6.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+            .background(com.realtor.geeksales.ui.theme.Divider)
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth((count.toFloat() / maxCount).coerceIn(0f, 1f))
+                .height(6.dp)
+                .background(color)
+        )
     }
 }

@@ -320,8 +320,16 @@ class WorkbuddyApi @Inject constructor(
         while (true) {
             val body = get("/followups?page=$page&pageSize=$PAGE_SIZE")
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
-            val r = runCatching { json.decodeFromString<WbFollowupPage>(body) }
-                .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
+            // 线上 /api/followups 返回裸数组（[]），与 contacts/tags 的 {"items":[...]} 不同：兼容两种格式
+            val r = runCatching {
+                val pageObj = runCatching { json.decodeFromString<WbFollowupPage>(body) }.getOrNull()
+                if (pageObj != null) {
+                    pageObj
+                } else {
+                    val arr = json.decodeFromString<List<WbFollowup>>(body)
+                    WbFollowupPage(items = arr, total = arr.size, page = 1, pageSize = arr.size)
+                }
+            }.getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
@@ -389,8 +397,9 @@ class WorkbuddyApi @Inject constructor(
                         if (!m.contactId.isNullOrBlank()) append("\"contactId\":\"${esc(m.contactId)}\",")
                         append("\"phone\":\"${esc(m.phone)}\",")
                         append("\"body\":\"${esc(m.body)}\",")
-                        append("\"direction\":\"${esc(m.direction)}\",")
-                        if (!m.messageDate.isNullOrBlank()) append("\"messageDate\":\"${esc(m.messageDate)}\",")
+                        append("\"direction\":\"${esc(m.direction)}\"")
+                        // messageDate 为最后可选字段：前置逗号、不带尾逗号，JSON 永远合法
+                        if (!m.messageDate.isNullOrBlank()) append(",\"messageDate\":\"${esc(m.messageDate)}\"")
                         append("}")
                     }
                 })

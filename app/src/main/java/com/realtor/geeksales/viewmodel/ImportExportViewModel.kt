@@ -1373,7 +1373,8 @@ class ImportExportViewModel @Inject constructor(
                 return@withContext
             }
             // 3) 推送未上传通话（增量，≤100/批；direction/callDate 按线上契约）
-            val toPush = repo.pendingCallUploads(500)
+            // 单次全量推送（≤5000）：历史通话一次同步到位，不再被 500 条上限截断
+            val toPush = repo.pendingCallUploads(5000)
             var pushed = 0
             var pushFailed = 0
             if (toPush.isNotEmpty()) {
@@ -1453,7 +1454,7 @@ class ImportExportViewModel @Inject constructor(
                 syncSummary = if (noNew) {
                     "本机最近无新增通话；可稍后再试，或确认「通话记录」权限已开启"
                 } else {
-                    "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条"
+                    "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条；通话为增量同步，重复同步会自动补全历史"
                 }
             )
         }

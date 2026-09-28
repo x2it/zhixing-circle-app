@@ -343,9 +343,13 @@ private fun FollowItem(f: FollowUp) {
 @Composable
 private fun KV(k: String, v: String?) {
     if (v.isNullOrBlank()) return
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
         Text(k, color = TextMuted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
-        Text(v, color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+        // 值占满剩余宽度并自然换行，长备注/地址不再横向溢出
+        Text(
+            v, color = TextPrimary, style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

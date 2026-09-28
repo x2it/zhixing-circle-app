@@ -149,7 +149,7 @@ class SchemaStore @Inject constructor(
         prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}~$labels").apply()
     }
 
-    /** 内置默认模板（房产销售场景，开箱即用） */
+    /** 内置默认模板：通用列（全行业可用）+ 房产模板字段（默认房产模板，购房需求组） */
     fun defaultSchema(): List<FieldDef> = listOf(
         FieldDef(BuiltinKeys.NAME, "姓名", "text", "基础信息", required = true, order = 1),
         FieldDef(BuiltinKeys.PHONE, "手机号", "tel", "基础信息", required = true, order = 2),

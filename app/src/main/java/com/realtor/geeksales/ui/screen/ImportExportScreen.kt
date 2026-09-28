@@ -532,19 +532,27 @@ fun ImportExportScreen(
                 GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) vm.clearAll() })
             }
 
-            // ================= 字段说明（跟随当前行业模板，不写死） =================
-            SectionCard("字段说明", "列顺序跟随当前模板；换行业后拉取新模板即可更新") {
+            // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
+            SectionCard("字段说明", "通用列全行业适用；模板扩展列与分层跟随当前模板，换行业后拉取新模板即可更新") {
                 val fields = vm.currentSchema().sortedBy { it.order }
-                val baseNames = fields.filter { it.builtin }.map { it.label }
-                val extNames = fields.filter { !it.builtin }.map { it.label }
+                // 房产模板字段（默认模板预设；换行业模板后由线上模板字段接管）
+                val reKeys = setOf("areaPref", "budgetMin", "budgetMax", "houseType", "targetProject")
+                val commonNames = fields.filter { it.builtin && it.key !in reKeys }.map { it.label }
+                val reNames = fields.filter { it.key in reKeys }.map { it.label }
+                val customNames = fields.filter { !it.builtin && it.key !in reKeys }.map { it.label }
                 val tierMeta = vm.meta()
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "CSV/XLSX 内置列（当前模板）：${baseNames.joinToString("、")}",
+                        "内置通用列（全行业）：${commonNames.joinToString("、")}",
                         color = TextPrimary, style = MaterialTheme.typography.bodyMedium
                     )
-                    if (extNames.isNotEmpty()) {
-                        Text("扩展列（模板自定义）：${extNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    if (reNames.isNotEmpty()) {
+                        Text("房产模板扩展列（当前默认模板）：${reNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (customNames.isNotEmpty()) {
+                        Text("自定义扩展列：${customNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Text("自定义扩展列：无（可点「添加字段」按需增加，不限于行业）", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                     Text(
                         "分层选项：${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}（跟随模板）",

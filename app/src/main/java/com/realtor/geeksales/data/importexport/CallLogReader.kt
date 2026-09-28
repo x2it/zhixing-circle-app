@@ -32,7 +32,7 @@ class CallLogReader @Inject constructor(
         private const val PREFS = "tma_prefs"
         private const val KEY_LAST_DATE = "call_log_last_date"
         /** 单次最多镜像最近 2000 条，避免首次全量卡顿 */
-        private const val MAX_SCAN = 2000
+        private const val MAX_SCAN = 5000
     }
 
     private val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -53,7 +53,7 @@ class CallLogReader @Inject constructor(
             val last = prefs.getLong(KEY_LAST_DATE, 0L)
             val selection = if (last > 0) "${CallLog.Calls.DATE} > ?" else null
             val args = if (last > 0) arrayOf(last.toString()) else null
-            // 时间倒序取最近 MAX_SCAN 条，避免首次全量卡顿
+            // 时间倒序取最近 MAX_SCAN 条（首次镜像上限；后续增量按时间戳自动补全）
             val rows = mutableListOf<Array<Any?>>()
             ctx.contentResolver.query(
                 CallLog.Calls.CONTENT_URI, projection, selection, args,

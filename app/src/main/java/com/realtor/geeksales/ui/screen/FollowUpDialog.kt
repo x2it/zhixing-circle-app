@@ -109,7 +109,7 @@ fun FollowUpDialog(
             }
         }
         Spacer(Modifier.height(8.dp))
-        GeekTextField(note, { note = it }, label = "备注", placeholder = "沟通重点：预算/房源/看房时间…", singleLine = false, minLines = 3)
+        GeekTextField(note, { note = it }, label = "备注", placeholder = "沟通重点：需求 / 关键信息 / 下一步…", singleLine = false, minLines = 3)
         Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GeekTextField(dateStr, { dateStr = it }, label = "下次跟进(日期)", modifier = Modifier.weight(1f), placeholder = "2025-08-30")
