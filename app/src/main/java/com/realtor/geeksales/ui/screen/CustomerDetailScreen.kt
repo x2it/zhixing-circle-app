@@ -61,6 +61,7 @@ fun CustomerDetailScreen(
     val c by vm.customer.collectAsStateWithLifecycle()
     val list by vm.followUps.collectAsStateWithLifecycle()
     val smsList by vm.smsMessages.collectAsStateWithLifecycle()
+    val callList by vm.callRecords.collectAsStateWithLifecycle()
     val extFields by vm.extFields.collectAsStateWithLifecycle()
     val schema by vm.schema.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
@@ -204,6 +205,22 @@ fun CustomerDetailScreen(
             } else {
                 items(smsList) { s -> SmsItem(s) }
             }
+            item { AsciiDivider(Modifier.padding(horizontal = 12.dp)) }
+            item {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("通话记录", color = Accent, style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.width(8.dp))
+                        Text("（本机镜像 + 云端备份）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+            if (callList.isEmpty()) {
+                item { EmptyState("暂无通话记录", "在「数据」页执行「备份+同步到云端」后，这里会显示该客户的通话时间线。") }
+            } else {
+                items(callList) { c -> CallItem(c) }
+            }
             item { Spacer(Modifier.height(100.dp)) }
         }
     }
@@ -246,6 +263,31 @@ private fun SmsItem(s: com.realtor.geeksales.data.db.SmsMessage) {
             }
             Spacer(Modifier.height(6.dp))
             Text(s.body, color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/** 通话记录条目（互动档案）：呼入/呼出/未接 + 时长 + 时间 */
+@Composable
+private fun CallItem(c: com.realtor.geeksales.data.db.CallRecord) {
+    val (label, color) = when (c.direction) {
+        "in" -> "呼入" to Success
+        "out" -> "呼出" to Accent
+        else -> "未接" to com.realtor.geeksales.ui.theme.Danger
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)) {
+        Column(Modifier.background(BgElev2).padding(12.dp).border(1.dp, Divider)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Spacer(Modifier.width(10.dp))
+                Text(if (c.duration > 0) "时长 ${Formatter.humanDuration(c.duration.toInt())}" else "未接通", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
+                Text(Formatter.full(c.callDate), color = TextMuted, style = MaterialTheme.typography.labelMedium)
+            }
+            if (!c.note.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(c.note!!, color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }

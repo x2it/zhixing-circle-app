@@ -1,6 +1,7 @@
 package com.realtor.geeksales.ui.screen
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -40,7 +42,9 @@ import com.realtor.geeksales.ui.theme.IntentS
 import com.realtor.geeksales.ui.theme.IntentU
 import com.realtor.geeksales.ui.theme.IntentV
 import com.realtor.geeksales.ui.theme.Success
+import com.realtor.geeksales.ui.theme.TextMuted
 import com.realtor.geeksales.ui.theme.TextPrimary
+import com.realtor.geeksales.ui.theme.TextSecondary
 import com.realtor.geeksales.ui.theme.Warning
 import com.realtor.geeksales.viewmodel.DashboardViewModel
 
@@ -55,6 +59,8 @@ fun DashboardScreen(
     val overdue by vm.overdue.collectAsStateWithLifecycle()
     val followUpsToday by vm.followUpsToday.collectAsStateWithLifecycle()
     val intentCounts by vm.intentCounts.collectAsStateWithLifecycle()
+    val overdueCustomers by vm.overdueCustomers.collectAsStateWithLifecycle()
+    val todayCustomers by vm.todayCustomers.collectAsStateWithLifecycle()
 
     val intentMap = intentCounts.associate { it.level to it.cnt }
     val maxCount = (intentMap.values.maxOrNull() ?: 0).coerceAtLeast(1)
@@ -88,6 +94,23 @@ fun DashboardScreen(
                 }
             }
 
+            // 今日跟进（界面①：逾期 + 今日，点击直达客户详情）
+            GeekCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("今日跟进 · 逾期${overdueCustomers.size} · 今日${todayCustomers.size}", color = Accent, style = MaterialTheme.typography.labelMedium)
+                    if (overdueCustomers.isEmpty() && todayCustomers.isEmpty()) {
+                        Text("暂无待跟进客户", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        overdueCustomers.take(5).forEach { c ->
+                            FollowupRow(c, "逾期", Danger) { onNav("${com.realtor.geeksales.navigation.Routes.CUSTOMER_DETAIL.replace("{id}", c.id.toString())}") }
+                        }
+                        todayCustomers.take(5).forEach { c ->
+                            FollowupRow(c, "今日", Warning) { onNav("${com.realtor.geeksales.navigation.Routes.CUSTOMER_DETAIL.replace("{id}", c.id.toString())}") }
+                        }
+                    }
+                }
+            }
+
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("分层分布（S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交 U未分类）", color = Accent, style = MaterialTheme.typography.labelMedium)
@@ -115,6 +138,25 @@ fun DashboardScreen(
                 }
             }
             Spacer(Modifier.height(80.dp))
+        }
+    }
+}
+
+@Composable
+private fun FollowupRow(c: com.realtor.geeksales.data.db.Customer, tag: String, color: Color, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {        Text(tag, color = color, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(40.dp))
+        Column(Modifier.weight(1f)) {
+            Text(c.name, color = TextPrimary, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            if (c.nextFollowAt != null) {
+                Text("下次跟进 ${com.realtor.geeksales.util.Formatter.full(c.nextFollowAt)}", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (!c.phone.isNullOrBlank()) {
+            Text(c.phone, color = TextSecondary, style = MaterialTheme.typography.labelMedium)
         }
     }
 }

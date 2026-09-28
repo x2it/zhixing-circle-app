@@ -58,6 +58,16 @@ class DashboardViewModel @Inject constructor(
         combine(todayStats, totalCustomers) { ts, _ -> ts.intentCounts }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** 过期未跟进客户（红，最优先处理） */
+    val overdueCustomers: StateFlow<List<com.realtor.geeksales.data.db.Customer>> =
+        repo.observeOverdue()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 今日需跟进客户（黄） */
+    val todayCustomers: StateFlow<List<com.realtor.geeksales.data.db.Customer>> =
+        repo.observeTodayFollowups()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private companion object {
         const val REFRESH_MS = 30_000L
     }

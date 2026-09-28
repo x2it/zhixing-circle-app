@@ -20,9 +20,10 @@ class Converters {
         Tag::class,
         CustomerTagMap::class,
         SmsMessage::class,
-        CustomerField::class
+        CustomerField::class,
+        CallRecord::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -32,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tagDao(): TagDao
     abstract fun smsDao(): SmsDao
     abstract fun customerFieldDao(): CustomerFieldDao
+    abstract fun callDao(): CallDao
 
     companion object {
         const val NAME = "geek_sales.db"
@@ -88,6 +90,25 @@ abstract class AppDatabase : RoomDatabase() {
                         "CREATE UNIQUE INDEX IF NOT EXISTS `index_customer_fields_customerId_fieldKey` " +
                             "ON `customer_fields` (`customerId`, `fieldKey`)"
                     )
+                }
+            },
+            // v5 → v6：通话记录表（本地通话镜像 + 知行朋友圈通话备份，详情页互动档案）
+            object : androidx.room.migration.Migration(5, 6) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `call_records` (" +
+                            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                            "`customerId` INTEGER NOT NULL, " +
+                            "`phone` TEXT NOT NULL, " +
+                            "`direction` TEXT NOT NULL, " +
+                            "`duration` INTEGER NOT NULL, " +
+                            "`callDate` INTEGER NOT NULL, " +
+                            "`note` TEXT, " +
+                            "`wbCallId` TEXT, " +
+                            "`createdAt` INTEGER NOT NULL)"
+                    )
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_call_records_customerId` ON `call_records` (`customerId`)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_call_records_callDate` ON `call_records` (`callDate`)")
                 }
             }
         )

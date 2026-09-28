@@ -146,6 +146,31 @@ data class WbMessagePage(
     @SerialName("pageSize") val pageSize: Int = 20
 )
 
+/** 知行朋友圈通话记录（通话备份/同步；线上 /api/calls，需先开启 call-sync 开关） */
+@Serializable
+data class WbCall(
+    val id: String = "",
+    @SerialName("contactId") val contactId: String? = null,
+    val phone: String = "",
+    /** in=呼入 / out=呼出 / missed=未接；只接受这三种，其他 400 */
+    val direction: String = "in",
+    /** 通话时长（秒）；未接填 0 */
+    val duration: Long = 0,
+    /** 通话时间，格式必须 "YYYY-MM-DD HH:mm" */
+    @SerialName("callDate") val callDate: String? = null,
+    val note: String? = null,
+    @SerialName("createdAt") val createdAt: String? = null,
+    @SerialName("updatedAt") val updatedAt: String? = null
+)
+
+@Serializable
+data class WbCallPage(
+    val items: List<WbCall> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    @SerialName("pageSize") val pageSize: Int = 20
+)
+
 sealed class WbResult<out T> {
     data class Success<T>(val data: T) : WbResult<T>()
     data class Error(val message: String) : WbResult<Nothing>()
@@ -341,6 +366,89 @@ class WorkbuddyApi @Inject constructor(
         else WbResult.Success(v)
     }
 
+    /** 一键开启线上短信同步开关（PUT /api/settings/sms-sync {"enabled":true}），失败返回错误 */
+    suspend fun setSmsSync(enabled: Boolean): WbResult<Unit> = withContext(Dispatchers.IO) {
+        val resp = put("/settings/sms-sync", "{\"enabled\":$enabled}")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
+    }
+
+    // ---- 通话记录同步：对应线上 /api/calls ----
+
+    /** 查询线上通话同步开关；false 时 calls 接口返回 403 */
+    suspend fun callSyncEnabled(): WbResult<Boolean> = withContext(Dispatchers.IO) {
+        val body = get("/settings/call-sync")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        val v = runCatching {
+            val el = json.parseToJsonElement(body)
+            (el as? JsonObject)?.get("callSyncEnabled")?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+        }.getOrNull()
+        if (v == null) WbResult.Error("响应解析失败：$body")
+        else WbResult.Success(v)
+    }
+
+    /** 一键开启线上通话同步开关（PUT /api/settings/call-sync {"enabled":true}） */
+    suspend fun setCallSync(enabled: Boolean): WbResult<Unit> = withContext(Dispatchers.IO) {
+        val resp = put("/settings/call-sync", "{\"enabled\":$enabled}")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
+    }
+
+    /** 分页拉取全部通话记录（需 call-sync 开关已开启，否则 403） */
+    suspend fun fetchAllCalls(): WbResult<List<WbCall>> = withContext(Dispatchers.IO) {
+        val all = mutableListOf<WbCall>()
+        var page = 1
+        while (true) {
+            val body = get("/calls?page=$page&pageSize=$PAGE_SIZE")
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            val r = runCatching { json.decodeFromString<WbCallPage>(body) }
+                .getOrElse { return@withContext WbResult.Error("响应解析失败：${it.message}") }
+            all += r.items
+            if (r.items.size < PAGE_SIZE || all.size >= r.total) break
+            page++
+        }
+        WbResult.Success(all)
+    }
+
+    /** 批量上传通话记录（POST /api/calls/batch，≤100 条/批；direction 只允许 in/out/missed，callDate 必须 YYYY-MM-DD HH:mm） */
+    suspend fun createCallsBatch(items: List<WbCall>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        withContext(Dispatchers.IO) {
+            if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
+            val body = buildString {
+                append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
+                append("\"source\":\"${esc(batchMeta.source)}\",")
+                append("\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\",")
+                append("\"items\":[")
+                append(items.joinToString(",") { buildCallJson(it) })
+                append("]}")
+            }
+            val resp = post("/calls/batch", body)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            runCatching { json.decodeFromString<WbBatchResponse>(resp) }
+                .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
+                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+        }
+
+    /** 删除一条线上通话记录（DELETE /api/calls/:id） */
+    suspend fun deleteCall(id: String): WbResult<Unit> = withContext(Dispatchers.IO) {
+        val resp = delete("/calls/$id")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
+    }
+
+    private fun buildCallJson(c: WbCall): String = buildString {
+        append("{")
+        if (!c.contactId.isNullOrBlank()) append("\"contactId\":\"${esc(c.contactId)}\",")
+        append("\"phone\":\"${esc(c.phone)}\",")
+        append("\"direction\":\"${esc(c.direction)}\",")
+        append("\"duration\":${c.duration},")
+        if (!c.callDate.isNullOrBlank()) append("\"callDate\":\"${esc(c.callDate)}\"")
+        if (!c.note.isNullOrBlank()) append(",\"note\":\"${esc(c.note)}\"")
+        append("}")
+    }
+
     /** 拉取线上模板：字段定义 + 分层 tiers + 身份/属性标签（GET /api/schema） */
     suspend fun fetchSchema(): WbResult<WbSchemaBundle> = withContext(Dispatchers.IO) {
         val body = get("/schema")
@@ -516,15 +624,15 @@ class WorkbuddyApi @Inject constructor(
     private fun get(path: String): String? = request("GET", path, null)
     private fun post(path: String, body: String): String? = request("POST", path, body)
     private fun put(path: String, body: String): String? = request("PUT", path, body)
+    private fun delete(path: String): String? = request("DELETE", path, null)
 
     private fun request(method: String, path: String, body: String?): String? {
         val key = apiKeyStore.load() ?: return null
-        // 第一通道：请求头认证（X-API-Key + Authorization: Bearer，遵循 skill.md 契约）
-        var resp = execute(method, path, body, key, null)
-        // 兼容通道：线上当前实现只认 ?api_key= 查询参数，请求头会 401；
-        // 检测到认证失败时自动降级重试一次，两种部署形态都能联通
+        // 第一通道：URL 参数认证（线上官方要求：公网经平台网关时自定义请求头会被剥离，?api_key= 才可靠）
+        var resp = execute(method, path, body, key, key)
+        // 兜底：query 认证失败时试请求头（本地直连或旧版服务端）
         if (resp != null && isAuthFailure(resp)) {
-            resp = execute(method, path, body, key, key)
+            resp = execute(method, path, body, key, null)
         }
         return resp
     }

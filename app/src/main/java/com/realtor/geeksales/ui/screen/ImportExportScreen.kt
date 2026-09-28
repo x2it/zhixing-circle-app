@@ -132,6 +132,18 @@ fun ImportExportScreen(
             }
         }
     }
+    // 通话动作标记（同步云端=1 / 仅拉取=2），权限授权后执行（通话同步需要读本机通话记录）
+    var callAction by remember { mutableStateOf(0) }
+    val callPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            when {
+                callAction == 1 -> vm.syncCallsToWorkbuddy()
+                callAction == 2 -> vm.pullCallsFromWorkbuddy()
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         GeekTopBar(title = "数据", subtitle = "导入 · 导出 · 知行同步 · 时光机", onBack = onBack)
@@ -366,6 +378,19 @@ fun ImportExportScreen(
                     Spacer(Modifier.weight(1f))
                 }
                 Text("短信为最敏感数据：默认仅本地增量备份（下载/TMA备份）；「同步到云端」仅在您主动点击时执行，需知行朋友圈已开放短信接口。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // ================= 通话记录备份与同步 =================
+            SectionCard("通话记录备份与同步", "本机镜像 · 云端双向同步（需 READ_CALL_LOG 权限）") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GeekPrimaryButton(if (busy) "处理中…" else "备份+同步到云端", {
+                        if (!busy) { callAction = 1; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
+                    }, Modifier.weight(1f), enabled = !busy)
+                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = {
+                        if (!busy) { callAction = 2; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
+                    })
+                }
+                Text("通话记录同步 = 云端通话备份：开启后本机通话（呼入/呼出/未接+时长）自动镜像并上传，客户详情「互动档案」可查看。云端开关默认关闭，首次同步会自动为你开启。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 导入数据 =================

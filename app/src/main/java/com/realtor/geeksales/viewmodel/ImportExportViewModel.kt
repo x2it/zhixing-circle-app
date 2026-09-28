@@ -12,6 +12,7 @@ import com.realtor.geeksales.data.db.Customer
 import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.db.IntentLevel
 import com.realtor.geeksales.data.importexport.CsvManager
+import com.realtor.geeksales.data.importexport.CallLogReader
 import com.realtor.geeksales.data.importexport.ExcelManager
 import com.realtor.geeksales.data.importexport.ImportReport
 import com.realtor.geeksales.data.importexport.SmsExporter
@@ -72,6 +73,7 @@ class ImportExportViewModel @Inject constructor(
     private val csv: CsvManager,
     private val excel: ExcelManager,
     private val smsExporter: SmsExporter,
+    private val callLogReader: CallLogReader,
     private val snapshot: SnapshotManager,
     private val repo: CustomerRepository,
     private val wbApi: WorkbuddyApi,
@@ -1106,15 +1108,22 @@ class ImportExportViewModel @Inject constructor(
                 _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
                 return@withContext
             }
-            // 先检查线上短信同步开关（关闭时 messages 接口 403）
+            // 检查线上短信同步开关；关闭时自动一键开启（PUT /api/settings/sms-sync），
+            // 用户点击同步按钮即视为授权开启；开启失败才提示去网页操作
             when (val sw = wbApi.smsSyncEnabled()) {
                 is WbResult.Error -> {
                     _status.value = IOStatus(message = "无法读取短信开关：${sw.message}")
                     return@withContext
                 }
                 is WbResult.Success -> if (!sw.data) {
-                    _status.value = IOStatus(message = "知行朋友圈短信同步开关未开启，请在网页「API 接入」页打开后再试")
-                    return@withContext
+                    progress(0.02f, "正在为你开启云端短信同步开关…")
+                    when (val on = wbApi.setSmsSync(true)) {
+                        is WbResult.Success -> progress(0.05f, "云端短信同步已开启，继续…")
+                        is WbResult.Error -> {
+                            _status.value = IOStatus(message = "云端短信同步开关未开启，且自动开启失败：${on.message}。请在网页「API 接入」页打开短信同步后再试")
+                            return@withContext
+                        }
+                    }
                 }
             }
             val prefs = ctx.getSharedPreferences("tma_prefs", Context.MODE_PRIVATE)
@@ -1196,15 +1205,22 @@ class ImportExportViewModel @Inject constructor(
                 _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
                 return@withContext
             }
-            // 先检查线上短信同步开关（关闭时 messages 接口 403）
+            // 检查线上短信同步开关；关闭时自动一键开启（PUT /api/settings/sms-sync），
+            // 用户点击同步按钮即视为授权开启；开启失败才提示去网页操作
             when (val sw = wbApi.smsSyncEnabled()) {
                 is WbResult.Error -> {
                     _status.value = IOStatus(message = "无法读取短信开关：${sw.message}")
                     return@withContext
                 }
                 is WbResult.Success -> if (!sw.data) {
-                    _status.value = IOStatus(message = "知行朋友圈短信同步开关未开启，请在网页「API 接入」页打开后再试")
-                    return@withContext
+                    progress(0.02f, "正在为你开启云端短信同步开关…")
+                    when (val on = wbApi.setSmsSync(true)) {
+                        is WbResult.Success -> progress(0.05f, "云端短信同步已开启，继续…")
+                        is WbResult.Error -> {
+                            _status.value = IOStatus(message = "云端短信同步开关未开启，且自动开启失败：${on.message}。请在网页「API 接入」页打开短信同步后再试")
+                            return@withContext
+                        }
+                    }
                 }
             }
             val imported = importRemoteSms()
@@ -1253,6 +1269,176 @@ class ImportExportViewModel @Inject constructor(
         }
         if (toInsert.isNotEmpty()) repo.insertSms(toInsert)
         imported
+    }
+
+    // ---- 通话记录：本地镜像 + 云端备份/同步（线上 /api/calls）----
+
+    /**
+     * 通话记录完整同步：①一键开启云端通话开关 ②镜像本地系统通话到本地表
+     * ③增量推送未上传通话 ④拉取云端通话去重入库。
+     * 需 READ_CALL_LOG 权限（UI 层在点击时请求）。
+     */
+    fun syncCallsToWorkbuddy() = doRun("通话记录同步中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            // 1) 云端开关：关闭时自动一键开启（用户点击同步即授权）
+            when (val sw = wbApi.callSyncEnabled()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "无法读取通话同步开关：${sw.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> if (!sw.data) {
+                    progress(0.02f, "正在为你开启云端通话同步开关…")
+                    when (val on = wbApi.setCallSync(true)) {
+                        is WbResult.Success -> progress(0.05f, "云端通话同步已开启，继续…")
+                        is WbResult.Error -> {
+                            _status.value = IOStatus(message = "云端通话同步开关未开启，且自动开启失败：${on.message}。请在网页「API 接入」页打开通话同步后再试")
+                            return@withContext
+                        }
+                    }
+                }
+            }
+            // 2) 镜像本地系统通话记录（增量，本地备份的第一道保险）
+            progress(0.08f, "读取本机通话记录…")
+            val mirror = callLogReader.mirrorLocalCallLog()
+            // 3) 推送未上传通话（增量，≤100/批；direction/callDate 按线上契约）
+            val toPush = repo.pendingCallUploads(500)
+            var pushed = 0
+            var pushFailed = 0
+            if (toPush.isNotEmpty()) {
+                val chunks = toPush.chunked(100)
+                chunks.forEachIndexed { ci, chunk ->
+                    progress(
+                        0.12f + 0.4f * ci / chunks.size.coerceAtLeast(1),
+                        "通话记录：上传 ${(ci * 100 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
+                    )
+                    val wbCalls = chunk.map { c ->
+                        com.realtor.geeksales.data.remote.WbCall(
+                            phone = c.phone,
+                            direction = c.direction,
+                            duration = c.duration,
+                            callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
+                            note = c.note
+                        )
+                    }
+                    when (val r = wbApi.createCallsBatch(wbCalls, batchMeta())) {
+                        is WbResult.Success -> {
+                            // 响应 items 与请求顺序一致，回填线上 id
+                            r.data.items.forEachIndexed { i, item ->
+                                val local = chunk.getOrNull(i) ?: return@forEachIndexed
+                                if (item.id.isNotBlank()) {
+                                    pushed++
+                                    if (local.wbCallId != item.id) repo.updateWbCallId(local.id, item.id)
+                                }
+                            }
+                            pushFailed += r.data.errors.count { it.index in chunk.indices }
+                        }
+                        is WbResult.Error -> pushFailed += chunk.size
+                    }
+                }
+            }
+            // 4) 拉取云端通话去重入库（互动档案完整性）
+            progress(0.6f, "拉取云端通话记录…")
+            var pulled = 0
+            when (val r = wbApi.fetchAllCalls()) {
+                is WbResult.Success -> {
+                    val customerByWbId = HashMap<String, Long>()
+                    val customerByPhone = HashMap<String, Long>()
+                    repo.getAll().forEach { c ->
+                        if (!c.wbContactId.isNullOrBlank()) customerByWbId[c.wbContactId] = c.id
+                        if (c.phoneNormalized.isNotBlank()) customerByPhone[c.phoneNormalized] = c.id
+                    }
+                    val toInsert = mutableListOf<com.realtor.geeksales.data.db.CallRecord>()
+                    r.data.forEach { wb ->
+                        if (wb.id.isBlank()) return@forEach
+                        if (repo.callByWbId(wb.id) != null) return@forEach
+                        val localId = wb.contactId?.let { customerByWbId[it] }
+                            ?: customerByPhone[Formatter.normalizePhone(wb.phone)]
+                            ?: 0L
+                        toInsert.add(
+                            com.realtor.geeksales.data.db.CallRecord(
+                                customerId = localId,
+                                phone = wb.phone,
+                                direction = wb.direction,
+                                duration = wb.duration,
+                                callDate = Formatter.dayToEpoch(wb.callDate?.take(10))
+                                    ?: System.currentTimeMillis(),
+                                note = wb.note,
+                                wbCallId = wb.id
+                            )
+                        )
+                        pulled++
+                        if (pulled % 500 == 0) kotlinx.coroutines.yield()
+                    }
+                    if (toInsert.isNotEmpty()) repo.insertCalls(toInsert)
+                }
+                is WbResult.Error -> { /* 拉取失败不阻塞，推送结果已汇报 */ }
+            }
+            progress(0.95f, "通话记录同步：完成汇总…")
+            _status.value = IOStatus(
+                message = "通话记录同步完成",
+                syncSummary = "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条"
+            )
+        }
+    }
+
+    /** 只拉取云端通话记录到本地（详情页互动档案用） */
+    fun pullCallsFromWorkbuddy() = doRun("拉取云端通话记录中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置知行朋友圈 API Key")
+                return@withContext
+            }
+            when (val sw = wbApi.callSyncEnabled()) {
+                is WbResult.Error -> {
+                    _status.value = IOStatus(message = "无法读取通话同步开关：${sw.message}")
+                    return@withContext
+                }
+                is WbResult.Success -> if (!sw.data) {
+                    _status.value = IOStatus(message = "云端通话同步开关未开启，请在网页「API 接入」页打开通话同步后再试")
+                    return@withContext
+                }
+            }
+            var pulled = 0
+            when (val r = wbApi.fetchAllCalls()) {
+                is WbResult.Error -> _status.value = IOStatus(message = "拉取失败：${r.message}")
+                is WbResult.Success -> {
+                    val customerByWbId = HashMap<String, Long>()
+                    val customerByPhone = HashMap<String, Long>()
+                    repo.getAll().forEach { c ->
+                        if (!c.wbContactId.isNullOrBlank()) customerByWbId[c.wbContactId] = c.id
+                        if (c.phoneNormalized.isNotBlank()) customerByPhone[c.phoneNormalized] = c.id
+                    }
+                    val toInsert = mutableListOf<com.realtor.geeksales.data.db.CallRecord>()
+                    r.data.forEach { wb ->
+                        if (wb.id.isBlank()) return@forEach
+                        if (repo.callByWbId(wb.id) != null) return@forEach
+                        val localId = wb.contactId?.let { customerByWbId[it] }
+                            ?: customerByPhone[Formatter.normalizePhone(wb.phone)]
+                            ?: 0L
+                        toInsert.add(
+                            com.realtor.geeksales.data.db.CallRecord(
+                                customerId = localId,
+                                phone = wb.phone,
+                                direction = wb.direction,
+                                duration = wb.duration,
+                                callDate = Formatter.dayToEpoch(wb.callDate?.take(10))
+                                    ?: System.currentTimeMillis(),
+                                note = wb.note,
+                                wbCallId = wb.id
+                            )
+                        )
+                        pulled++
+                        if (pulled % 500 == 0) kotlinx.coroutines.yield()
+                    }
+                    if (toInsert.isNotEmpty()) repo.insertCalls(toInsert)
+                    _status.value = IOStatus(message = "云端通话拉取完成：$pulled 条（已存本地，可在客户详情页查看）")
+                }
+            }
+        }
     }
 
     // ---- 字段映射（以线上为准）----

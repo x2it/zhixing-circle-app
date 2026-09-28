@@ -7,6 +7,8 @@ import com.realtor.geeksales.data.db.CustomerFieldDao
 import com.realtor.geeksales.data.db.CustomerTagMap
 import com.realtor.geeksales.data.db.FollowUp
 import com.realtor.geeksales.data.db.FollowUpDao
+import com.realtor.geeksales.data.db.CallDao
+import com.realtor.geeksales.data.db.CallRecord
 import com.realtor.geeksales.data.db.FollowResult
 import com.realtor.geeksales.data.db.IntentCount
 import com.realtor.geeksales.data.db.IntentLevel
@@ -26,7 +28,8 @@ class CustomerRepository @Inject constructor(
     private val followUpDao: FollowUpDao,
     private val tagDao: TagDao,
     private val smsDao: SmsDao,
-    private val customerFieldDao: CustomerFieldDao
+    private val customerFieldDao: CustomerFieldDao,
+    private val callDao: CallDao
 ) {
     fun observeFiltered(
         query: String?,
@@ -50,6 +53,16 @@ class CustomerRepository @Inject constructor(
     )
 
     fun observeById(id: Long): Flow<Customer?> = customerDao.observeById(id)
+
+    /** 工作台「今日跟进」：今日需跟进客户（nextFollowAt 在今天内） */
+    fun observeTodayFollowups(): Flow<List<Customer>> {
+        val start = Formatter.todayStart()
+        return customerDao.observeTodayFollowups(start, start + 86_400_000L)
+    }
+
+    /** 工作台「已过期」：nextFollowAt 已过期客户 */
+    fun observeOverdue(now: Long = System.currentTimeMillis()): Flow<List<Customer>> =
+        customerDao.observeOverdue(now)
 
     suspend fun getFilteredForExport(
         query: String?,
@@ -255,6 +268,25 @@ class CustomerRepository @Inject constructor(
     suspend fun insertSms(messages: List<SmsMessage>) = smsDao.insertAll(messages)
 
     suspend fun smsByWbId(wbId: String): SmsMessage? = smsDao.findByWbMessageId(wbId)
+
+    // ---- 通话记录（本地通话镜像 + 云端通话备份）----
+    fun observeCallsOf(customerId: Long): Flow<List<CallRecord>> = callDao.observeByCustomer(customerId)
+
+    suspend fun callsByCustomer(customerId: Long): List<CallRecord> = callDao.getByCustomer(customerId)
+
+    suspend fun recentCalls(limit: Int): List<CallRecord> = callDao.getRecent(limit)
+
+    /** 尚未上传云端（无 wbCallId）的通话，按时间倒序 */
+    suspend fun pendingCallUploads(limit: Int = 500): List<CallRecord> = callDao.getPendingUpload(limit)
+
+    suspend fun insertCalls(calls: List<CallRecord>) = callDao.insertAll(calls)
+
+    suspend fun callByWbId(wbId: String): CallRecord? = callDao.findByWbCallId(wbId)
+
+    suspend fun updateWbCallId(localId: Long, wbId: String) = callDao.updateWbCallId(localId, wbId)
+
+    /** 清空通话表（时光机恢复前） */
+    suspend fun clearAllCalls() = callDao.clearAll()
 
     // ---- 时光机快照/恢复 ----
     suspend fun allTags(): List<Tag> = tagDao.getAll()

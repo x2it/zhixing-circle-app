@@ -67,6 +67,22 @@ interface CustomerDao {
         todayStart: Long = 0
     ): Flow<List<Customer>>
 
+    /** 今日需跟进客户（nextFollowAt 落在 [todayStart, tomorrowStart)），工作台「今日跟进」用 */
+    @Query("""
+        SELECT * FROM customers 
+        WHERE nextFollowAt IS NOT NULL AND nextFollowAt >= :todayStart AND nextFollowAt < :tomorrowStart
+        ORDER BY nextFollowAt ASC
+    """)
+    fun observeTodayFollowups(todayStart: Long, tomorrowStart: Long): Flow<List<Customer>>
+
+    /** 过期未跟进客户（nextFollowAt < now），工作台「已过期」用 */
+    @Query("""
+        SELECT * FROM customers 
+        WHERE nextFollowAt IS NOT NULL AND nextFollowAt <= :now
+        ORDER BY nextFollowAt ASC
+    """)
+    fun observeOverdue(now: Long): Flow<List<Customer>>
+
     @Query("""
         SELECT * FROM customers 
         WHERE (:query IS NULL OR (name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR targetProject LIKE '%' || :query || '%' OR areaPref LIKE '%' || :query || '%'))

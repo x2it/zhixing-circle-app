@@ -31,4 +31,5 @@ object DatabaseModule {
     @Provides fun tagDao(db: AppDatabase): TagDao = db.tagDao()
     @Provides fun smsDao(db: AppDatabase): SmsDao = db.smsDao()
     @Provides fun customerFieldDao(db: AppDatabase): CustomerFieldDao = db.customerFieldDao()
+    @Provides fun callDao(db: AppDatabase): com.realtor.geeksales.data.db.CallDao = db.callDao()
 }
