@@ -40,7 +40,7 @@ data class TemplateMeta(
     val identityTags: List<String> = emptyList(),
     /** 属性标签：学区房 / 地铁房 / 改善型 … */
     val attributeTags: List<String> = emptyList(),
-    /** 分层中文语义（模板可覆盖）：S→成交高价值…U→未分类；缺省用房产语义 */
+    /** 分层中文语义（模板可覆盖）：S→高价值成交…U→未分类；缺省用通用销售分层语义（行业无关） */
     val tierLabels: Map<String, String> = DEFAULT_TIER_LABELS
 ) {
     /** 全部模板标签（身份 + 属性，去重保序），供编辑页标签选择器 */
@@ -50,11 +50,26 @@ data class TemplateMeta(
     fun tierBadge(t: String): String = if (t == "U") "/" else t
 
     /** 分层的完整语义文案：字母 · 语义（U 显示为 / · 未分类） */
-    fun tierLabel(t: String): String = "${tierBadge(t)} · ${tierLabels[t] ?: t}"
+    fun tierLabel(t: String): String {
+        // 语义归一：去掉“客户”等冗余后缀，避免长文案误导（线上模板 description 权威，仅做展示清洗）
+        val label = (tierLabels[t] ?: t).removeSuffix("客户")
+        return "${tierBadge(t)} · $label"
+    }
+
+    /** 分层建议节奏（通用销售节奏，行业无关；驱动 Dashboard/编辑页的层次提示） */
+    fun tierCadence(t: String): String = when (t) {
+        "S" -> "每季度维护 1 次"
+        "A" -> "每周跟进 1 次"
+        "B" -> "每两周跟进 1 次"
+        "C" -> "每月联系 1 次"
+        "D" -> "每两周摸底 1 次"
+        "V" -> "成交后定期售后维护"
+        else -> "待分层后按需跟进"
+    }
 
     companion object {
         val DEFAULT_TIER_LABELS: Map<String, String> = mapOf(
-            "S" to "成交高价值", "A" to "高意向", "B" to "已接触", "C" to "信息完整",
+            "S" to "高价值成交", "A" to "高意向", "B" to "已接触", "C" to "信息完整",
             "D" to "线索", "V" to "已成交", "U" to "未分类"
         )
     }

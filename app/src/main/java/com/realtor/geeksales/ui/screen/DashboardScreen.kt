@@ -122,7 +122,8 @@ fun DashboardScreen(
                         if (count > 0 || t != "U") {
                             IntentRow(
                                 level = tierMeta.tierBadge(t),
-                                semantic = tierMeta.tierLabels[t] ?: t,
+                                semantic = tierMeta.tierLabel(t),
+                                cadence = tierMeta.tierCadence(t),
                                 count = count,
                                 color = tierColor[t] ?: Accent,
                                 maxCount = maxCount
@@ -135,6 +136,7 @@ fun DashboardScreen(
                         IntentRow(
                             level = "/",
                             semantic = "未分类",
+                            cadence = "待分层后按需跟进",
                             count = unclassified,
                             color = IntentU,
                             maxCount = maxCount
@@ -181,7 +183,7 @@ private fun FollowupRow(c: com.realtor.geeksales.data.db.Customer, tag: String, 
 }
 
 @Composable
-private fun IntentRow(level: String, semantic: String, count: Int, color: Color, maxCount: Int) {
+private fun IntentRow(level: String, semantic: String, cadence: String, count: Int, color: Color, maxCount: Int) {
     // 行头：徽标 + 语义 + 数量（两端对齐，语义弹性截断自适应）
     Row(
         Modifier.fillMaxWidth(),
@@ -193,11 +195,17 @@ private fun IntentRow(level: String, semantic: String, count: Int, color: Color,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
             modifier = Modifier.width(24.dp)
         )
-        Text(
-            semantic, color = TextMuted, style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.weight(1f), maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                semantic, color = TextMuted, style = MaterialTheme.typography.labelMedium,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                "建议：$cadence", color = com.realtor.geeksales.ui.theme.TextMuted,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
         Text("$count", color = TextPrimary, style = MaterialTheme.typography.titleSmall,
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
     }

@@ -1174,7 +1174,7 @@ class ImportExportViewModel @Inject constructor(
             var pushed = 0
             var failed = 0
             var maxId = cursor
-            val toPush = mutableListOf<WbMessage>()
+            val toPush = mutableListOf<Pair<Long, WbMessage>>()
             runCatching {
                 ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
                     val idI = c.getColumnIndexOrThrow("_id")
@@ -1195,7 +1195,7 @@ class ImportExportViewModel @Inject constructor(
                         val key = "$phone|$body|$dateLabel"
                         if (key in remoteKeys) continue
                         toPush.add(
-                            WbMessage(
+                            id to WbMessage(
                                 contactId = wbIdByPhone[Formatter.normalizePhone(phone)],
                                 phone = phone,
                                 body = body,
@@ -1215,24 +1215,32 @@ class ImportExportViewModel @Inject constructor(
                 return@withContext
             }
             // 批量推送（≤100/批，线上按批次归档可时光机回溯）
+            // 关键：游标只按“整批成功”推进；任一整批失败则失败部分永远留在游标之后，下次重试，
+            // 避免“失败一次后永远提示没有新短信”的数据静默丢失
             if (toPush.isNotEmpty()) {
+                var lastOkId = cursor
+                var anyOk = false
                 val chunks = toPush.chunked(100)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
                         0.1f + 0.8f * ci / chunks.size.coerceAtLeast(1),
                         "短信同步：上传 ${(ci * 100 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
                     )
-                    when (val r = wbApi.createMessagesBatch(chunk, batchMeta())) {
+                    when (val r = wbApi.createMessagesBatch(chunk.map { it.second }, batchMeta())) {
                         is WbResult.Success -> {
                             pushed += r.data.items.count { it.id.isNotBlank() }
                             failed += r.data.errors.size
+                            if (r.data.errors.isEmpty()) {
+                                lastOkId = maxOf(lastOkId, chunk.maxOf { it.first })
+                                anyOk = true
+                            }
                         }
                         is WbResult.Error -> failed += chunk.size
                     }
                     kotlinx.coroutines.yield()
                 }
+                if (anyOk) prefs.edit().putLong("sms_sync_last_id", lastOkId).apply()
             }
-            prefs.edit().putLong("sms_sync_last_id", maxId).apply()
             // 0 条也要说清楚：区分"已全部同步过"与"权限/数据问题"，绝不假成功
             val msg = if (pushed == 0 && failed == 0) {
                 "未发现可同步的新短信（本机无新短信，或已全部同步过）"
@@ -1680,12 +1688,17 @@ class ImportExportViewModel @Inject constructor(
         return if (note.isNotEmpty()) "[$label] $note" else "[$label]"
     }
 
+    private var runningJob: kotlinx.coroutines.Job? = null
+
     private fun doRun(progressMsg: String, block: suspend () -> Unit) {
+        // 防重入：上一次同步/导入导出未结束，忽略本次点击，避免并发重复推送
+        if (runningJob?.isActive == true) return
         _status.value = IOStatus(running = true, message = progressMsg)
-        viewModelScope.launch {
+        runningJob = viewModelScope.launch {
             runCatching { block() }
                 .onFailure { t ->
-                    _status.value = IOStatus(message = "失败：${t.message ?: t.javaClass.simpleName}")
+                    // 异常路径必须标 isError，UI 才按失败样式提示，不能误报成功
+                    _status.value = IOStatus(message = "失败：${t.message ?: t.javaClass.simpleName}", isError = true)
                 }
         }
     }

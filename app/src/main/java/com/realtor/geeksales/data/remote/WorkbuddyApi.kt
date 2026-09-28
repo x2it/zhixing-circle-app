@@ -542,9 +542,23 @@ class WorkbuddyApi @Inject constructor(
             (o.get(k) as? JsonArray)?.mapNotNull { el ->
                 (el as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             }.orEmpty()
+        // 线上模板字段 fields：[{key,label,type,options,group,required,order}] → App 扩展列，随模板动态
+        val fields = (o.get("fields") as? JsonArray)?.mapNotNull { el ->
+            runCatching {
+                val jo = el.jsonObject
+                val key = jo["key"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return@runCatching null
+                val label = jo["label"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: key
+                val type = jo["type"]?.jsonPrimitive?.content ?: "text"
+                val group = jo["group"]?.jsonPrimitive?.content
+                val required = runCatching { jo["required"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() }.getOrNull() ?: false
+                val order = runCatching { (jo["sortOrder"] ?: jo["order"])?.jsonPrimitive?.content?.toIntOrNull() }.getOrNull() ?: 0
+                val options = (jo["options"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
+                WbRemoteField(key = key, label = label, type = type, group = group, required = required, options = options, order = order)
+            }.getOrNull()
+        }.orEmpty()
         WbResult.Success(
             WbSchemaBundle(
-                fields = emptyList(),
+                fields = fields,
                 tiers = tiers.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
                 identityTags = tagList("identityTags"),
                 attributeTags = tagList("attributeTags"),
