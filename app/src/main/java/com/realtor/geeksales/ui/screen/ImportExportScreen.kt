@@ -208,6 +208,17 @@ fun ImportExportScreen(
                             status.syncSummary?.let {
                                 Text(it, color = TextMuted, style = MaterialTheme.typography.labelMedium)
                             }
+                            status.report?.let { r ->
+                                if (r.error == null) {
+                                    Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+                                    Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
+                                    Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
+                                    Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            status.exportCount?.let { n ->
+                                Text("已导出：$n 条", color = Success, style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
                     }
                 }
@@ -215,7 +226,7 @@ fun ImportExportScreen(
             val busy = status.running
 
             // ================= 知行朋友圈 · 云端同步 =================
-            SectionCard("客户通讯录 · 双向同步", "联系人 / 跟进 与云端双向同步；同步前自动全量备份") {
+            SectionCard("客户通讯录 · 双向同步", "客户 / 跟进 · 云端双向同步（同步前自动全量备份）") {
                 // 服务器地址（可切换，平台迁移/关停时更换）
                 Text("服务器地址（平台迁移时可更换）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -300,12 +311,12 @@ fun ImportExportScreen(
                     GeekPrimaryButton(if (busy) "处理中…" else "同步到云端", { if (!busy) vm.exportToWorkbuddy() }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Success, onClick = { if (!busy) vm.importFromWorkbuddy() })
                 }
-                Text("「同步到云端」= 本地数据上传线上；「从云端拉取」= 线上数据同步回本地。每次执行前自动全量备份到「下载/TMA备份」；拉取默认不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                Text("⚠ API Key 关联你的知行朋友圈账号：一人一账号一密钥，请勿与他人共用，否则云端数据会混淆。", color = Warning, style = MaterialTheme.typography.bodyMedium)
+                Text("执行前自动全量备份到「下载/TMA备份」；拉取不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("⚠ API Key 关联知行朋友圈账号：一人一账号一密钥，请勿共用。", color = Warning, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 线上模板 · 万物可插 =================
-            SectionCard("线上模板 · 字段可插", "以线上模板为准：拉取字段定义，App 表单/详情/导入导出自动跟随；本地可自定义字段并推送线上") {
+            SectionCard("线上模板 · 字段可插", "字段 / 分层 / 标签跟随线上模板，换行业即换模板，不写死") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekPrimaryButton(if (busy) "处理中…" else "拉取线上模板", { if (!busy) { vm.pullSchema(); schemaVersion++ } }, Modifier.weight(1f), enabled = !busy)
                     Text("当前 ${schema.size} 个字段（内置 ${schema.count { it.builtin }} · 扩展 ${schema.count { !it.builtin }}）", color = TextSecondary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1.2f))
@@ -320,7 +331,7 @@ fun ImportExportScreen(
                     }
                 }
                 Spacer(Modifier.height(2.dp))
-                Text("添加自定义字段（同步到线上模板）", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                Text("添加自定义字段", color = TextMuted, style = MaterialTheme.typography.labelMedium)
                 androidx.compose.material3.OutlinedTextField(
                     value = newFieldKey,
                     onValueChange = { newFieldKey = it },
@@ -398,7 +409,7 @@ fun ImportExportScreen(
                     schemaVersion++
                     newFieldKey = ""; newFieldLabel = ""; newFieldOptions = ""
                 })
-                Text("拉取线上模板后，表单/详情/导入导出表头自动跟随线上字段；自定义字段同步到线上模板，全网生效。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+
             }
 
             // ================= 时光机 =================
@@ -407,29 +418,29 @@ fun ImportExportScreen(
                     GeekPrimaryButton(if (busy) "处理中…" else "立即快照", { if (!busy) vm.snapshotNow() }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "从备份恢复", color = if (busy) TextMuted else Warning, onClick = { if (!busy) pickRestore.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "text/*")) })
                 }
-                Text("快照 = 含客户/跟进/标签/短信的完整 XLSX；恢复为覆盖模式，恢复前会自动再备份当前状态（双保险）。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("快照为完整 XLSX（客户/跟进/标签/短信）；恢复为覆盖模式，恢复前自动备份当前状态（双保险）。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 短信备份与同步 =================
-            SectionCard("短信 · 双向同步", "本地增量备份 · 云端双向同步（需短信权限）") {
+            SectionCard("短信 · 双向同步", "本地备份 · 云端双向同步（需短信权限）") {
                 val smsGranted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_SMS) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    GeekPrimaryButton(if (busy) "处理中…" else "备份短信(CSV)", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
+                    GeekPrimaryButton(if (busy) "处理中…" else "备份到本地", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else Success, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
                 }
                 Text(
-                    if (smsGranted) "短信权限：已授权" else "短信权限：未授权（点击上方按钮会请求授权；拒绝后需到系统设置开启）",
+                    if (smsGranted) "短信权限：已授权" else "短信权限：未授权（拒绝后需到系统设置开启）",
                     color = if (smsGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
                     Spacer(Modifier.weight(1f))
                 }
-                Text("短信为最敏感数据：默认仅本地增量备份（下载/TMA备份）；「同步到云端」仅在您主动点击时执行，需知行朋友圈已开放短信接口。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("短信属敏感数据：默认仅本地备份（下载/TMA备份）；「同步到云端」仅主动点击时执行。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 通话记录备份与同步 =================
-            SectionCard("通话记录 · 双向同步", "本机镜像 · 云端双向同步（需通话记录权限）") {
+            SectionCard("通话记录 · 双向同步", "通话记录 · 云端双向同步（需通话记录权限）") {
                 val callGranted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekPrimaryButton(if (busy) "处理中…" else "同步到云端", {
@@ -440,10 +451,10 @@ fun ImportExportScreen(
                     })
                 }
                 Text(
-                    if (callGranted) "通话记录权限：已授权" else "通话记录权限：未授权（点击上方按钮会请求授权；拒绝后需到系统设置开启）",
+                    if (callGranted) "通话记录权限：已授权" else "通话记录权限：未授权（拒绝后需到系统设置开启）",
                     color = if (callGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
                 )
-                Text("「同步到云端」= 先读取本机通话（呼入/呼出/未接+时长）镜像入库，再上传云端，客户详情「互动档案」可查看；「从云端拉取」= 线上通话同步回本地。通话为增量同步，重复同步自动补全历史。云端开关默认关闭，首次同步会自动开启。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("同步到云端 = 读取本机通话（呼入/呼出/未接/时长）入库并上传，客户详情「互动档案」可查看；拉取 = 线上通话回本地。重复同步自动补全历史，首次同步自动开启云端开关。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 导入数据 =================
@@ -483,53 +494,6 @@ fun ImportExportScreen(
                 })
             }
 
-            // ================= 执行状态 =================
-            SectionCard("执行状态", null) {
-                val c = when {
-                    status.running -> Warning
-                    status.isError -> Danger
-                    status.message.startsWith("失败") -> Danger
-                    else -> Success
-                }
-                if (status.message.isNotEmpty()) {
-                    Text(status.message, color = c, style = MaterialTheme.typography.bodyMedium)
-                }
-                // 执行状态卡同步展示确定性进度（与顶部卡片一致）
-                val p = status.progress
-                if (status.running && p != null) {
-                    Spacer(Modifier.height(6.dp))
-                    androidx.compose.material3.LinearProgressIndicator(
-                        progress = { p },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Accent,
-                        trackColor = Divider
-                    )
-                    Text(
-                        "进度 ${(p * 100).toInt()}%",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.align(Alignment.End)
-                    )
-                }
-                status.report?.let { r ->
-                    if (r.error == null) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("总计：${r.total}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                        Text("成功：${r.success}", color = Success, style = MaterialTheme.typography.bodyMedium)
-                        Text("重复跳过：${r.duplicated}", color = Warning, style = MaterialTheme.typography.bodyMedium)
-                        Text("无效号码：${r.invalid}", color = Danger, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                status.exportCount?.let { n ->
-                    Spacer(Modifier.height(4.dp))
-                    Text("已导出：$n 条", color = Success, style = MaterialTheme.typography.bodyMedium)
-                }
-                status.syncSummary?.let { s ->
-                    Spacer(Modifier.height(4.dp))
-                    Text(s, color = TextSecondary, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-
             // ================= 危险操作 =================
             SectionCard("危险操作", null) {
                 Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
@@ -537,7 +501,7 @@ fun ImportExportScreen(
             }
 
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
-            SectionCard("字段说明", "通用列全行业适用；模板扩展列与分层跟随当前模板，换行业后拉取新模板即可更新") {
+            SectionCard("字段说明", "通用列全行业适用；模板扩展列与分层跟随当前模板，换行业拉取新模板即可") {
                 val fields = vm.currentSchema().sortedBy { it.order }
                 // 内置通用列 vs 内置扩展列（默认模板的业务扩展字段；换行业模板后由线上模板字段接管）
                 val reKeys = setOf("areaPref", "budgetMin", "budgetMax", "houseType", "targetProject")
@@ -554,9 +518,9 @@ fun ImportExportScreen(
                         Text("内置扩展列（默认模板）：${reNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                     if (customNames.isNotEmpty()) {
-                        Text("扩展列（线上模板/自定义，跟随当前模板）：${customNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("扩展列（跟随当前模板）：${customNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     } else {
-                        Text("扩展列：暂无（点「拉取线上模板」同步线上字段；或点「添加字段」按需增加，不限于行业）", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("扩展列：暂无（点「拉取线上模板」或「添加字段」即可新增，不限于行业）", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                     Text(
                         "分层选项：${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}（跟随模板）",

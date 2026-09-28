@@ -238,7 +238,7 @@ fun CustomerDetailScreen(
                 }
             }
             if (callList.isEmpty()) {
-                item { EmptyState("暂无通话记录", "在「数据」页执行「备份+同步到云端」后，这里会显示该客户的通话时间线。") }
+                item { EmptyState("暂无通话记录", "在「数据」页执行「同步到云端」后，这里会显示该客户的通话时间线。") }
             } else {
                 items(callList) { c -> CallItem(c) }
             }

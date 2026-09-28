@@ -14,8 +14,8 @@ android {
         applicationId = "com.realtor.geeksales"
         minSdk = 31
         targetSdk = 36
-        versionCode = 36
-        versionName = "2.5.8"
+        versionCode = 37
+        versionName = "2.5.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
