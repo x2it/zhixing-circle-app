@@ -519,8 +519,21 @@ class WorkbuddyApi @Inject constructor(
 
     private fun request(method: String, path: String, body: String?): String? {
         val key = apiKeyStore.load() ?: return null
+        // 第一通道：请求头认证（X-API-Key + Authorization: Bearer，遵循 skill.md 契约）
+        var resp = execute(method, path, body, key, null)
+        // 兼容通道：线上当前实现只认 ?api_key= 查询参数，请求头会 401；
+        // 检测到认证失败时自动降级重试一次，两种部署形态都能联通
+        if (resp != null && isAuthFailure(resp)) {
+            resp = execute(method, path, body, key, key)
+        }
+        return resp
+    }
+
+    private fun execute(method: String, path: String, body: String?, key: String, queryKey: String?): String? {
+        val sep = if (path.contains("?")) "&" else "?"
+        val url = baseUrl() + path + if (queryKey != null) "$sep" + "api_key=$queryKey" else ""
         val b = Request.Builder()
-            .url(baseUrl() + path)
+            .url(url)
             // 双头兼容：X-API-Key（早期约定）+ Authorization: Bearer（线上官方推荐）
             .header("X-API-Key", key)
             .header("Authorization", "Bearer $key")
@@ -537,6 +550,11 @@ class WorkbuddyApi @Inject constructor(
             }
         }.getOrNull()
     }
+
+    /** 判断响应是否为认证失败（未登录/会话过期/UNAUTHORIZED），用于降级重试 */
+    private fun isAuthFailure(body: String): Boolean =
+        body.contains("未登录") || body.contains("会话已过期") ||
+            body.contains("UNAUTHORIZED") || body.startsWith("HTTP 401")
 
     private fun is2xx(body: String): Boolean = runCatching {
         val el = json.parseToJsonElement(body)
