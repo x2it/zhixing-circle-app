@@ -144,20 +144,6 @@ fun DashboardScreen(
                     }
                 }
             }
-
-            GeekCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("快速入口", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekGhostButton("客户列表", onClick = { onNav(Routes.CUSTOMER_LIST) }, modifier = Modifier.weight(1f), color = Accent)
-                        GeekGhostButton("拨号队列", onClick = { onNav(Routes.DIAL_QUEUE) }, modifier = Modifier.weight(1f), color = Accent)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GeekGhostButton("导入 / 导出", onClick = { onNav(Routes.IMPORT_EXPORT) }, modifier = Modifier.weight(1f), color = Accent)
-                        GeekGhostButton("设置", onClick = { onNav(Routes.SETTINGS) }, modifier = Modifier.weight(1f), color = Accent)
-                    }
-                }
-            }
             Spacer(Modifier.height(80.dp))
         }
     }

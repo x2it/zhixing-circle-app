@@ -33,6 +33,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -930,8 +931,15 @@ class ImportExportViewModel @Inject constructor(
                         when (mode) {
                             // 云端优先：线上为准，本地改动不覆盖线上
                             SyncMode.CLOUD_FIRST -> skipped++
-                            // 本地优先 / 智能合并：本地为准推送更新
-                            else -> toUpdate.add(Triple(c, wb, remote.id))
+                            // 智能合并：本地有真实改动（updatedAt 新于云端）才推送更新，云端已最新则跳过，
+                            // 日常同步只推几十条真实变更，秒级完成，不再 2330 条全量串行 PUT
+                            SyncMode.SMART -> {
+                                val remoteUp = remote.updatedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+                                if (remoteUp != null && (c.updatedAt ?: 0L) <= remoteUp) skipped++
+                                else toUpdate.add(Triple(c, wb, remote.id))
+                            }
+                            // 本地优先：本地为准推送更新
+                            SyncMode.LOCAL_FIRST -> toUpdate.add(Triple(c, wb, remote.id))
                         }
                     }
                     else -> toCreate.add(c to wb)
@@ -957,7 +965,8 @@ class ImportExportViewModel @Inject constructor(
                     }
                 }
                 var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createContactsBatch(chunk.map { it.second }, batchMeta()) }
-                if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                if (r is WbResult.Error && chunk.size > 100) {
+                    // 大包失败 → 拆 100 重发（服务端上限 100/500 自适应）
                     chunk.chunked(100).forEach { c100 ->
                         applyCreated(withBackoff { wbApi.createContactsBatch(c100.map { it.second }, batchMeta()) }, c100)
                         kotlinx.coroutines.yield()
@@ -968,17 +977,33 @@ class ImportExportViewModel @Inject constructor(
                 kotlinx.coroutines.yield()
                 kotlinx.coroutines.delay(250)
             }
-            // 更新已有联系人（单条 PUT，线上无批量更新接口）
+            // 更新已有联系人（单条 PUT；6 并发 + 真实进度，不再串行假死）
             progress(0.7f, "知行同步：更新已有联系人 ${toUpdate.size} 条…")
-            toUpdate.forEach { (c, wb, remoteId) ->
+            if (toUpdate.isNotEmpty()) {
+                // 6 并发单条 PUT（线上无批量更新接口）：ExecutorService 并发 + 真实进度，不再串行假死
+                val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
                 try {
-                    if (wbApi.updateContact(remoteId, wb) is WbResult.Success) {
-                        updated++
-                        if (c.wbContactId.isNullOrBlank() || c.wbContactId != remoteId) {
-                            repo.updateWbContactId(c.id, remoteId)
-                        }
-                    } else failed++
-                } catch (t: Exception) { failed++ }
+                    val futures = toUpdate.map { (c, wb, remoteId) ->
+                        pool.submit(java.util.concurrent.Callable<Boolean> {
+                            kotlinx.coroutines.runBlocking {
+                                try { wbApi.updateContact(remoteId, wb) is WbResult.Success }
+                                catch (t: Exception) { false }
+                            }
+                        })
+                    }
+                    var done = 0
+                    futures.forEach { fut ->
+                        val ok = try { fut.get() } catch (t: Exception) { false }
+                        if (ok) {
+                            updated++
+                            val backfill = toUpdate[done]
+                            try { kotlinx.coroutines.runBlocking { repo.updateWbContactId(backfill.first.id, backfill.third) } }
+                            catch (t: Exception) { /* 回填失败不影响同步结果 */ }
+                        } else failed++
+                        done++
+                        progress(0.7f + 0.22f * done / toUpdate.size.coerceAtLeast(1), "知行同步：更新已有联系人 $done/${toUpdate.size}…")
+                    }
+                } finally { pool.shutdown() }
             }
             // 4) 推送跟进历史（通话登记），批量 /followups/batch，按线上 followups 去重
             var pushed = 0
@@ -1010,9 +1035,9 @@ class ImportExportViewModel @Inject constructor(
                     )
                 )
             }
-            fuToPush.chunked(500).forEachIndexed { fi, chunk ->
+            fuToPush.chunked(100).forEachIndexed { fi, chunk ->
                 progress(
-                    0.72f + 0.16f * fi / fuToPush.chunked(500).size.coerceAtLeast(1),
+                    0.72f + 0.16f * fi / fuToPush.chunked(100).size.coerceAtLeast(1),
                     "知行同步：推送跟进记录 ${(fi * 500 + chunk.size).coerceAtMost(fuToPush.size)}/${fuToPush.size}…"
                 )
                 suspend fun applyFu(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<com.realtor.geeksales.data.remote.WbFollowup>) {
@@ -1024,7 +1049,8 @@ class ImportExportViewModel @Inject constructor(
                     }
                 }
                 var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createFollowupsBatch(chunk, batchMeta()) }
-                if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                if (r is WbResult.Error && chunk.size > 100) {
+                    // 大包失败 → 拆 100 重发（服务端上限 100/500 自适应）
                     chunk.chunked(100).forEach { c100 ->
                         applyFu(withBackoff { wbApi.createFollowupsBatch(c100, batchMeta()) }, c100)
                         kotlinx.coroutines.yield()
@@ -1200,6 +1226,7 @@ class ImportExportViewModel @Inject constructor(
             var pushed = 0
             var failed = 0
             var lastErrCode: Int? = null
+            var lastErrMsg: String? = null
             val toPush = mutableListOf<Pair<Long, WbMessage>>()
             runCatching {
                 ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
@@ -1243,7 +1270,7 @@ class ImportExportViewModel @Inject constructor(
             // 服务端按 号码+时间+内容 幂等去重，重试不会产生重复数据
             if (toPush.isNotEmpty()) {
                 var maxOkDate = since
-                val chunks = toPush.chunked(500)
+                val chunks = toPush.chunked(100)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
                         0.1f + 0.8f * ci / chunks.size.coerceAtLeast(1),
@@ -1253,8 +1280,10 @@ class ImportExportViewModel @Inject constructor(
                     if (r is WbResult.Error) {
                         val code = r.message.substringBefore(':').trim().toIntOrNull()
                         lastErrCode = code ?: lastErrCode
-                        // 500 批被服务端上限拒绝（HTTP 400/413/415）→ 自动拆 100 重发，保证兼容
-                        if (code in listOf(400, 413, 415) && chunk.size > 100) {
+                        lastErrMsg = r.message.take(200)
+                        // 大包失败（5xx 服务端繁忙/上限、400/413/415 契约上限）→ 自动拆 100 重发，
+                        // 服务端上限是 100 还是 500 都自适应；100 仍失败才计失败
+                        if (chunk.size > 100) {
                             chunk.chunked(100).forEach { c100 ->
                                 when (val r2 = withBackoff { wbApi.createMessagesBatch(c100.map { it.second }, batchMeta()) }) {
                                     is WbResult.Success -> {
@@ -1265,6 +1294,7 @@ class ImportExportViewModel @Inject constructor(
                                     is WbResult.Error -> {
                                         val c2 = r2.message.substringBefore(':').trim().toIntOrNull()
                                         if (c2 != null) lastErrCode = c2
+                                        lastErrMsg = r2.message.take(200)
                                         failed += c100.size
                                     }
                                 }
@@ -1293,15 +1323,24 @@ class ImportExportViewModel @Inject constructor(
             val errHint = when (lastErrCode) {
                 401 -> "API Key 无效或已失效：请到数据页检查密钥"
                 403 -> "云端同步开关未开启：请先开启短信同步开关再试"
-                429 -> "线上限流：已自动重试，稍后再试"
+                429 -> "线上限流：已自动重试仍失败，本地数据未受影响，稍后再试"
                 in 400..499 -> "请求被云端拒绝（HTTP $lastErrCode）：多为字段格式问题，已保留本地数据"
+                in 500..599 -> "线上服务繁忙或批次过大被拒（HTTP $lastErrCode）：已自动拆小批重试，本地数据未受影响"
                 else -> null
             }
             _status.value = IOStatus(
                 message = msg,
                 isError = failed > 0,
                 syncSummary = if (failed > 0) {
-                    "失败 ${failed} 条；${errHint ?: "本地数据未受影响，稍后重试即可"}"
+                    buildString {
+                        append("失败 ${failed} 条；")
+                        if (lastErrCode != null) {
+                            append(errHint ?: "本地数据未受影响，稍后重试即可")
+                            append("\n服务端返回：${lastErrMsg.orEmpty().take(160)}")
+                        } else {
+                            append("原因：${lastErrMsg.orEmpty().take(160)}")
+                        }
+                    }
                 } else "云端已按批次归档，可时光机回溯"
             )
         }
@@ -1438,7 +1477,7 @@ class ImportExportViewModel @Inject constructor(
             var pushed = 0
             var pushFailed = 0
             if (toPush.isNotEmpty()) {
-                val chunks = toPush.chunked(500)
+                val chunks = toPush.chunked(100)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
                         0.12f + 0.4f * ci / chunks.size.coerceAtLeast(1),
@@ -1469,7 +1508,8 @@ class ImportExportViewModel @Inject constructor(
                         )
                     }
                     var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createCallsBatch(wbCalls, batchMeta()) }
-                    if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                    if (r is WbResult.Error && chunk.size > 100) {
+                        // 大包失败 → 拆 100 重发（服务端上限 100/500 自适应）
                         chunk.chunked(100).forEach { c100 ->
                             val wbC100 = c100.map { c ->
                                 com.realtor.geeksales.data.remote.WbCall(

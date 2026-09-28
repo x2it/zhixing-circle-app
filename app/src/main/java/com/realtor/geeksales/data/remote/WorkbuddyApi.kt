@@ -38,7 +38,10 @@ data class WbContact(
     /** 自定义扩展字段（线上模板自定义字段，key→value） */
     @SerialName("customFields") val customFields: Map<String, String> = emptyMap(),
     /** 幂等键：App 端传本地记录 ID（tma-<id>），重复上传不会产生重复数据 */
-    @SerialName("externalId") val externalId: String? = null
+    @SerialName("externalId") val externalId: String? = null,
+    /** 服务端维护的时间戳（ISO-8601）：用于智能合并时对比“本地改动是否新于云端” */
+    @SerialName("createdAt") val createdAt: String? = null,
+    @SerialName("updatedAt") val updatedAt: String? = null
 )
 
 /** 线上模板元数据：tiers（分层）/ identityTags（身份标签）/ attributeTags（属性标签），驱动 App 筛选与标签选择器 */
@@ -385,7 +388,7 @@ class WorkbuddyApi @Inject constructor(
     suspend fun createMessagesBatch(items: List<WbMessage>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
-            if (items.size > 500) return@withContext WbResult.Error("批量上传单次最多 500 条，请分批")
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
             val body = buildString {
                 append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
                 append("\"source\":\"${esc(batchMeta.source)}\",")
@@ -473,7 +476,7 @@ class WorkbuddyApi @Inject constructor(
     suspend fun createCallsBatch(items: List<WbCall>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
-            if (items.size > 500) return@withContext WbResult.Error("批量上传单次最多 500 条，请分批")
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
             val body = buildString {
                 append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
                 append("\"source\":\"${esc(batchMeta.source)}\",")
@@ -594,7 +597,7 @@ class WorkbuddyApi @Inject constructor(
     suspend fun createContactsBatch(items: List<WbContact>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
-            if (items.size > 500) return@withContext WbResult.Error("批量上传单次最多 500 条，请分批")
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
             val body = buildString {
                 append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
                 append("\"source\":\"${esc(batchMeta.source)}\",")
@@ -615,7 +618,7 @@ class WorkbuddyApi @Inject constructor(
     suspend fun createFollowupsBatch(items: List<WbFollowup>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
         withContext(Dispatchers.IO) {
             if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
-            if (items.size > 500) return@withContext WbResult.Error("批量上传单次最多 500 条，请分批")
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
             val body = buildString {
                 append("{\"batchName\":\"${esc(batchMeta.batchName)}\",")
                 append("\"source\":\"${esc(batchMeta.source)}\",")
