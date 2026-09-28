@@ -229,6 +229,15 @@ class WorkbuddyApi @Inject constructor(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // 网关按 User-Agent 区分浏览器/客户端：非浏览器 UA 可能被返回 HTML 挑战页（表现为“同步失败无原因”），
+        // 统一带浏览器 UA，避免被风控拦截
+        .addInterceptor { chain ->
+            val req = chain.request().newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 TMA/${com.realtor.geeksales.BuildConfig.VERSION_NAME}")
+                .header("Accept", "application/json")
+                .build()
+            chain.proceed(req)
+        }
         .build()
 
     val apiKey: String? get() = apiKeyStore.load()
@@ -699,7 +708,14 @@ class WorkbuddyApi @Inject constructor(
                 '\n' -> append("\\n")
                 '\r' -> append("\\r")
                 '\t' -> append("\\t")
-                else -> append(ch)
+                else -> {
+                    // 其余 C0 控制字符（0x00-0x1F）、DEL(0x7F) 与 Unicode 行分隔符在 JSON 字符串中非法，
+                    // 必须 \uXXXX 转义，否则服务端 JSON 解析报 "Bad control character" 并拒绝整批
+                    val c = ch.code
+                    if (c < 0x20 || c == 0x7F || c == 0x2028 || c == 0x2029) {
+                        append("\\u").append(c.toString(16).padStart(4, '0'))
+                    } else append(ch)
+                }
             }
         }
     }

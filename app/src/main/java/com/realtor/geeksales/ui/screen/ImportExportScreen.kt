@@ -70,10 +70,9 @@ fun ImportExportScreen(
         if (m.isEmpty() || m == "idle") return@LaunchedEffect
         if (m == lastNotified) return@LaunchedEffect
         lastNotified = m
-        // 进行中：全局顶部转圈提示（任何滚动位置都可见）；结束：明确成功/失败反馈
-        if (status.running) {
-            GlobalToast.showLoading(m)
-        } else {
+        // 进行中：不再弹全局顶部 loading 横幅（下方状态卡已完整展示进度与取消，避免重复）；
+        // 结束：轻量 toast 明确成功/失败反馈
+        if (!status.running) {
             if (status.isError) GlobalToast.showError(m) else GlobalToast.showSuccess(m)
         }
     }
