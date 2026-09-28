@@ -25,6 +25,7 @@ import com.realtor.geeksales.data.remote.WbRemoteField
 import com.realtor.geeksales.data.repo.CustomerRepository
 import com.realtor.geeksales.data.schema.FieldDef
 import com.realtor.geeksales.data.schema.SchemaStore
+import com.realtor.geeksales.data.schema.TemplateMeta
 import com.realtor.geeksales.util.Formatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -82,7 +83,7 @@ class ImportExportViewModel @Inject constructor(
 
     // ---- 线上模板（schema）：拉取 / 自定义字段 ----
 
-    /** 拉取线上模板字段定义并合并进本地 schema（自动适配：线上加字段→App 跟随） */
+    /** 拉取线上模板（字段定义 + 分层 tiers + 身份/属性标签）并合并进本地（自动适配：线上加字段→App 跟随） */
     fun pullSchema() = doRun("拉取线上模板中…") {
         withContext(Dispatchers.IO) {
             if (apiKeyStore.load().isNullOrBlank()) {
@@ -92,11 +93,21 @@ class ImportExportViewModel @Inject constructor(
             when (val r = wbApi.fetchSchema()) {
                 is WbResult.Error -> _status.value = IOStatus(message = "拉取模板失败：${r.message}（线上需已开放 /api/schema 接口）")
                 is WbResult.Success -> {
-                    if (r.data.isEmpty()) {
-                        _status.value = IOStatus(message = "线上模板暂无自定义字段（已保留本地内置模板）")
+                    val bundle = r.data
+                    // 模板元数据（tiers/标签）始终落库，驱动筛选与标签选择器
+                    val oldMeta = schemaStore.meta()
+                    schemaStore.saveMeta(
+                        TemplateMeta(
+                            tiers = bundle.tiers.ifEmpty { oldMeta.tiers },
+                            identityTags = bundle.identityTags.ifEmpty { oldMeta.identityTags },
+                            attributeTags = bundle.attributeTags.ifEmpty { oldMeta.attributeTags }
+                        )
+                    )
+                    if (bundle.fields.isEmpty()) {
+                        _status.value = IOStatus(message = "线上模板已同步（分层 ${bundle.tiers.joinToString("/")}；标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个）")
                         return@withContext
                     }
-                    val remote = r.data.map {
+                    val remote = bundle.fields.map {
                         FieldDef(
                             key = it.key,
                             label = it.label.ifBlank { it.key },
@@ -109,7 +120,7 @@ class ImportExportViewModel @Inject constructor(
                         )
                     }
                     val merged = schemaStore.mergeRemote(remote)
-                    _status.value = IOStatus(message = "模板已同步：${merged.size} 个字段（线上定义为准）")
+                    _status.value = IOStatus(message = "模板已同步：${merged.size} 个字段 · 分层 ${bundle.tiers.joinToString("/")} · 标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个")
                 }
             }
         }
@@ -577,17 +588,20 @@ class ImportExportViewModel @Inject constructor(
                 }
                 is WbResult.Success -> r.data
             }
-            // 3) 按同步模式查重处理
+            // 3) 按同步模式查重处理（externalId 幂等优先：本地记录 tma-<id> 与线上对应，改号也不重复创建）
             val mode = syncMode()
             var imported = 0
             var skipped = 0
             var conflicts = 0
             var overridden = 0
             val newIds = mutableListOf<Long>()
+            val localByExtId = HashMap<String, Long>()
+            repo.getAll().forEach { c -> if (c.id > 0L) localByExtId["tma-${c.id}"] = c.id }
             contacts.forEach { wb ->
                 val phoneN = Formatter.normalizePhone(wb.phone)
                 if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) return@forEach
-                val existing = repo.getByPhoneNormalized(phoneN)
+                val extLocalId = wb.externalId?.let { localByExtId[it] }
+                val existing = extLocalId?.let { repo.getById(it) } ?: repo.getByPhoneNormalized(phoneN)
                 if (existing != null) {
                     when (mode) {
                         // 本地优先：本地为准，跳过
@@ -595,7 +609,14 @@ class ImportExportViewModel @Inject constructor(
                         // 云端优先：线上覆盖本地（字段 + 标签 + 扩展字段 + 线上 id）
                         SyncMode.CLOUD_FIRST -> {
                             overridden++
-                            val merged = wbToCustomer(wb, phoneN).copy(id = existing.id, createdAt = existing.createdAt)
+                            // 防串场：线上号码若已被本地其他客户占用（改号场景），保留本地号码，其余字段仍以线上为准
+                            val phoneOwner = repo.getByPhoneNormalized(phoneN)
+                            val safePhone = phoneOwner != null && phoneOwner.id != existing.id
+                            val merged = wbToCustomer(wb, if (safePhone) existing.phoneNormalized else phoneN).copy(
+                                id = existing.id, createdAt = existing.createdAt,
+                                phone = if (safePhone) existing.phone else wb.phone,
+                                phoneNormalized = if (safePhone) existing.phoneNormalized else phoneN
+                            )
                             repo.upsertAndGetId(merged)
                             if (wb.id.isNotBlank()) repo.updateWbContactId(existing.id, wb.id)
                             if (wb.customFields.isNotEmpty()) repo.putExtFields(existing.id, wb.customFields)
@@ -714,7 +735,7 @@ class ImportExportViewModel @Inject constructor(
                 running = true,
                 message = "已自动创建 $createdTags 个本地标签到知行朋友圈…"
             )
-            // 3) 按同步模式导出联系人
+            // 3) 按同步模式导出联系人（新建走批量 /contacts/batch，externalId 幂等；更新走单条 PUT）
             val mode = syncMode()
             var created = 0
             var updated = 0
@@ -722,6 +743,8 @@ class ImportExportViewModel @Inject constructor(
             var failed = 0
             var noPhone = 0
             val localAll = repo.getAll()
+            val toCreate = mutableListOf<Pair<Customer, com.realtor.geeksales.data.remote.WbContact>>()
+            val toUpdate = mutableListOf<Triple<Customer, com.realtor.geeksales.data.remote.WbContact, String>>()
             localAll.forEach { c ->
                 val phoneN = c.phoneNormalized
                 if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) {
@@ -732,38 +755,46 @@ class ImportExportViewModel @Inject constructor(
                 val ext = repo.extFieldsOf(c.id)
                 val wb = customerToWb(c, tagIds, ext)
                 val remote = remoteByPhone[phoneN]
-                try {
-                    when {
-                        remote != null -> {
-                            when (mode) {
-                                // 云端优先：线上为准，本地改动不覆盖线上
-                                SyncMode.CLOUD_FIRST -> skipped++
-                                // 本地优先 / 智能合并：本地为准推送更新
-                                else -> {
-                                    if (wbApi.updateContact(remote.id, wb) is WbResult.Success) {
-                                        updated++
-                                        if (c.wbContactId.isNullOrBlank() || c.wbContactId != remote.id) {
-                                            repo.updateWbContactId(c.id, remote.id)
-                                        }
-                                    } else failed++
-                                }
-                            }
-                        }
-                        else -> {
-                            when (val r = wbApi.createContact(wb)) {
-                                is WbResult.Success -> {
-                                    created++
-                                    repo.updateWbContactId(c.id, r.data)
-                                }
-                                is WbResult.Error -> failed++
-                            }
+                when {
+                    remote != null -> {
+                        when (mode) {
+                            // 云端优先：线上为准，本地改动不覆盖线上
+                            SyncMode.CLOUD_FIRST -> skipped++
+                            // 本地优先 / 智能合并：本地为准推送更新
+                            else -> toUpdate.add(Triple(c, wb, remote.id))
                         }
                     }
-                } catch (t: Exception) {
-                    failed++
+                    else -> toCreate.add(c to wb)
                 }
             }
-            // 4) 推送跟进历史（通话登记），按线上 followups 去重
+            // 批量新建：≤100/批，externalId 幂等，逐条失败不阻塞
+            toCreate.chunked(100).forEach { chunk ->
+                when (val r = wbApi.createContactsBatch(chunk.map { it.second })) {
+                    is WbResult.Success -> {
+                        r.data.items.forEachIndexed { i, item ->
+                            val local = chunk.getOrNull(i)?.first ?: return@forEachIndexed
+                            if (item.id.isNotBlank()) {
+                                created++
+                                if (local.wbContactId != item.id) repo.updateWbContactId(local.id, item.id)
+                            }
+                        }
+                        failed += r.data.errors.count { it.index in chunk.indices }
+                    }
+                    is WbResult.Error -> { failed += chunk.size }
+                }
+            }
+            // 更新已有联系人（单条 PUT，线上无批量更新接口）
+            toUpdate.forEach { (c, wb, remoteId) ->
+                try {
+                    if (wbApi.updateContact(remoteId, wb) is WbResult.Success) {
+                        updated++
+                        if (c.wbContactId.isNullOrBlank() || c.wbContactId != remoteId) {
+                            repo.updateWbContactId(c.id, remoteId)
+                        }
+                    } else failed++
+                } catch (t: Exception) { failed++ }
+            }
+            // 4) 推送跟进历史（通话登记），批量 /followups/batch，按线上 followups 去重
             var pushed = 0
             var fuFailed = 0
             val remoteFus = when (val fr = wbApi.fetchAllFollowups()) {
@@ -776,22 +807,30 @@ class ImportExportViewModel @Inject constructor(
             }
             val customerById = HashMap<Long, Customer>()
             localAll.forEach { c -> customerById[c.id] = c }
+            val fuToPush = mutableListOf<com.realtor.geeksales.data.remote.WbFollowup>()
             repo.allFollowUps().forEach { fu ->
                 val owner = customerById[fu.customerId]?.wbContactId ?: return@forEach
                 val content = followupContent(fu)
                 val date = Formatter.epochToDay(fu.createdAt) ?: return@forEach
                 val key = "$owner|$content|$date"
                 if (key in remoteFuKeys) return@forEach
-                val wbFu = com.realtor.geeksales.data.remote.WbFollowup(
-                    contactId = owner,
-                    content = content,
-                    followupType = "phone",
-                    followupDate = date,
-                    nextFollowupDate = Formatter.epochToDay(fu.remindAt)
+                fuToPush.add(
+                    com.realtor.geeksales.data.remote.WbFollowup(
+                        contactId = owner,
+                        content = content,
+                        followupType = "phone",
+                        followupDate = date,
+                        nextFollowupDate = Formatter.epochToDay(fu.remindAt)
+                    )
                 )
-                when (wbApi.createFollowup(wbFu)) {
-                    is WbResult.Success -> { pushed++; remoteFuKeys.add(key) }
-                    is WbResult.Error -> fuFailed++
+            }
+            fuToPush.chunked(100).forEach { chunk ->
+                when (val r = wbApi.createFollowupsBatch(chunk)) {
+                    is WbResult.Success -> {
+                        pushed += chunk.size - r.data.errors.count { it.index in chunk.indices }
+                        fuFailed += r.data.errors.count { it.index in chunk.indices }
+                    }
+                    is WbResult.Error -> fuFailed += chunk.size
                 }
             }
             _status.value = IOStatus(
@@ -1044,11 +1083,18 @@ class ImportExportViewModel @Inject constructor(
     /** 智能合并：本地空字段 ← 线上非空；冲突保留本地并计数 */
     private fun mergeWbIntoLocal(local: Customer, wb: com.realtor.geeksales.data.remote.WbContact): Customer {
         fun <T : CharSequence> pick(l: T?, r: T?): T? = if (!l.isNullOrBlank()) l else r
+        val (parsed, restNote) = parseMemo(wb.memo)
         return local.copy(
             wechat = pick(local.wechat, wb.wechat),
             source = pick(local.source, wb.source),
-            note = pick(local.note, wb.memo),
+            note = pick(local.note, restNote),
             nickname = pick(local.nickname, wb.nickname),
+            // memo 解析出的购房需求字段：本地空 ← 线上
+            targetProject = pick(local.targetProject, parsed.targetProject),
+            areaPref = pick(local.areaPref, parsed.areaPref),
+            budgetMinWan = local.budgetMinWan ?: parsed.budgetMinWan,
+            budgetMaxWan = local.budgetMaxWan ?: parsed.budgetMaxWan,
+            houseType = pick(local.houseType, parsed.houseType),
             nextFollowAt = local.nextFollowAt ?: Formatter.dayToEpoch(wb.nextFollowupDate),
             updatedAt = System.currentTimeMillis()
         )
@@ -1061,41 +1107,58 @@ class ImportExportViewModel @Inject constructor(
         return diff(local.wechat, wb.wechat) || diff(local.note, wb.memo) || diff(local.nickname, wb.nickname)
     }
 
-    /** 线上 tier S/A/B/C/D/V → 本地意向等级 */
+    /** 线上 tier S/A/B/C/D/V → 本地意向等级（六层语义对齐：B/C/D 是接触深度漏斗） */
     private fun wbTierToLevel(tier: String?): IntentLevel = when (tier?.trim()?.uppercase()) {
-        "S", "A", "V" -> IntentLevel.A
+        "S" -> IntentLevel.S
+        "A" -> IntentLevel.A
         "B" -> IntentLevel.B
         "C" -> IntentLevel.C
         "D" -> IntentLevel.D
+        "V" -> IntentLevel.V
+        // U 线上已兼容并归为 D；本地保留 U（纯本地状态）
         else -> IntentLevel.U
     }
 
     private fun levelToWbTier(level: IntentLevel): String? = when (level) {
+        IntentLevel.S -> "S"
         IntentLevel.A -> "A"
         IntentLevel.B -> "B"
         IntentLevel.C -> "C"
         IntentLevel.D -> "D"
+        IntentLevel.V -> "V"
+        // U 为纯本地状态：不同步（线上也兼容 U 自动归 D）
         IntentLevel.U -> null
     }
 
-    /** 线上联系人 → 本地客户 */
-    private fun wbToCustomer(wb: com.realtor.geeksales.data.remote.WbContact, phoneN: String): Customer =
-        Customer(
+    /** 线上联系人 → 本地客户（memo 中楼盘/区域/预算/房型自动回填内置字段） */
+    private fun wbToCustomer(wb: com.realtor.geeksales.data.remote.WbContact, phoneN: String): Customer {
+        val (parsed, restNote) = parseMemo(wb.memo)
+        return Customer(
             name = wb.name.ifBlank { "未命名" },
             phone = wb.phone,
             phoneNormalized = phoneN,
             wechat = wb.wechat,
             source = wb.source?.ifBlank { null } ?: "知行朋友圈",
             intentLevel = wbTierToLevel(wb.tier),
-            note = wb.memo,
+            note = restNote,
             nextFollowAt = Formatter.dayToEpoch(wb.nextFollowupDate),
             nickname = wb.nickname,
+            targetProject = parsed.targetProject,
+            areaPref = parsed.areaPref,
+            budgetMinWan = parsed.budgetMinWan,
+            budgetMaxWan = parsed.budgetMaxWan,
+            houseType = parsed.houseType,
             wbContactId = wb.id,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
+    }
 
-    /** 本地客户 → 线上联系人（导出用）；customFields 为本地扩展字段（线上模板自定义字段） */
+    /**
+     * 本地客户 → 线上联系人（导出用）。
+     * 内置字段 + 扩展字段；memo 并入楼盘/区域/预算/房型（线上无独立字段，统一入备注）；
+     * externalId = "tma-<本地ID>"，幂等同步关键。
+     */
     private fun customerToWb(c: Customer, tagIds: List<String>, customFields: Map<String, String> = emptyMap()): com.realtor.geeksales.data.remote.WbContact =
         com.realtor.geeksales.data.remote.WbContact(
             name = c.name,
@@ -1105,10 +1168,65 @@ class ImportExportViewModel @Inject constructor(
             tier = levelToWbTier(c.intentLevel),
             source = c.source,
             nextFollowupDate = Formatter.epochToDay(c.nextFollowAt),
-            memo = c.note,
+            memo = mergeToMemo(c),
             tagIds = tagIds,
-            customFields = customFields
+            customFields = customFields,
+            externalId = "tma-${c.id}"
         )
+
+    /** 楼盘/区域/预算/房型 无独立字段，统一并入线上 memo（分号分隔键值，导入时可解析回填） */
+    private fun mergeToMemo(c: Customer): String {
+        val items = mutableListOf<String>()
+        if (!c.targetProject.isNullOrBlank()) items.add("楼盘：${c.targetProject}")
+        if (!c.areaPref.isNullOrBlank()) items.add("区域：${c.areaPref}")
+        val budget = buildString {
+            if (c.budgetMinWan != null) append("${c.budgetMinWan}")
+            if (c.budgetMinWan != null && c.budgetMaxWan != null) append("-")
+            if (c.budgetMaxWan != null) append("${c.budgetMaxWan}")
+        }
+        if (budget.isNotBlank()) items.add("预算：${budget}万")
+        if (!c.houseType.isNullOrBlank()) items.add("房型：${c.houseType}")
+        val merged = items.joinToString("；")
+        val note = c.note?.trim().orEmpty()
+        return if (merged.isNotEmpty() && note.isNotEmpty()) "$merged；$note"
+        else if (merged.isNotEmpty()) merged else note
+    }
+
+    /** 从线上 memo 解析楼盘/区域/预算/房型 回填本地内置字段（键值分号分隔；其余并入备注） */
+    private fun parseMemo(memo: String?): Pair<Customer, String> {
+        // 返回 (回填的字段增量, 剩余备注)
+        val note = memo?.trim().orEmpty()
+        if (note.isEmpty()) return Customer(name = "", phone = "", phoneNormalized = "") to note
+        var project: String? = null
+        var area: String? = null
+        var budgetMin: Int? = null
+        var budgetMax: Int? = null
+        var house: String? = null
+        val rest = mutableListOf<String>()
+        note.split('；', ';').forEach { seg ->
+            val s = seg.trim()
+            when {
+                s.startsWith("楼盘：") -> project = s.removePrefix("楼盘：").trim()
+                s.startsWith("区域：") -> area = s.removePrefix("区域：").trim()
+                s.startsWith("预算：") -> {
+                    val v = s.removePrefix("预算：").trim().removeSuffix("万").trim()
+                    val parts = v.split('-', '—', '~')
+                    budgetMin = parts.getOrNull(0)?.toIntOrNull()
+                    budgetMax = parts.getOrNull(1)?.toIntOrNull()
+                }
+                s.startsWith("房型：") -> house = s.removePrefix("房型：").trim()
+                else -> if (s.isNotBlank()) rest.add(s)
+            }
+        }
+        return Customer(
+            name = "", phone = "", phoneNormalized = "",
+            targetProject = project,
+            areaPref = area,
+            budgetMinWan = budgetMin,
+            budgetMaxWan = budgetMax,
+            houseType = house
+        ) to rest.joinToString("；")
+    }
 
     /** 本地跟进记录 → 线上 content 文本（含结果标签，便于回读） */
     private fun followupContent(fu: com.realtor.geeksales.data.db.FollowUp): String {

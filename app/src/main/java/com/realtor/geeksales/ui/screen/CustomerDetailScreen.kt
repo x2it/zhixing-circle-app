@@ -2,6 +2,7 @@ package com.realtor.geeksales.ui.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +63,7 @@ fun CustomerDetailScreen(
     val smsList by vm.smsMessages.collectAsStateWithLifecycle()
     val extFields by vm.extFields.collectAsStateWithLifecycle()
     val schema by vm.schema.collectAsStateWithLifecycle()
+    val tags by vm.tags.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(id) { vm.setCustomerId(id) }
     // 超时降级：3 秒仍未加载出客户，显示明确错误态而非无限转圈（历史"看似假死"来源之一）
     var loadTimeout by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -116,6 +119,23 @@ fun CustomerDetailScreen(
                                 Text(customer.name, color = TextPrimary, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                                 Spacer(Modifier.width(10.dp))
                                 IntentLevelChip(customer.intentLevel)
+                            }
+                            // 标签展示（模板标签选择器录入 / 云端同步回来）
+                            if (tags.isNotEmpty()) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                                    tags.forEach { t ->
+                                        Text(
+                                            text = t,
+                                            color = TextSecondary,
+                                            modifier = Modifier
+                                                .background(BgElev2)
+                                                .border(1.dp, Divider)
+                                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("电话  ", color = TextMuted, style = MaterialTheme.typography.bodyMedium)

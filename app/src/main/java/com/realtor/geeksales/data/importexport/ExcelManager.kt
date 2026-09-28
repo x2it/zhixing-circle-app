@@ -70,8 +70,8 @@ class ExcelManager @Inject constructor(
                     val norm = Formatter.normalizePhone(phone)
                     if (!seenInFile.add(norm)) { dup++; continue }
                     val level = when (row.getCell(12)?.str()?.trim()?.uppercase()) {
-                        "A" -> IntentLevel.A; "B" -> IntentLevel.B; "C" -> IntentLevel.C
-                        "D" -> IntentLevel.D; else -> IntentLevel.U
+                        "S" -> IntentLevel.S; "A" -> IntentLevel.A; "B" -> IntentLevel.B; "C" -> IntentLevel.C
+                        "D" -> IntentLevel.D; "V" -> IntentLevel.V; else -> IntentLevel.U
                     }
                     val ext = HashMap<String, String>()
                     extKeys.forEachIndexed { i, k ->

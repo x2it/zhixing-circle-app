@@ -4,8 +4,12 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/** 意向等级：A=强烈意向，B=一般意向，C=弱意向，D=无效/拒接，U=未评级 */
-enum class IntentLevel { A, B, C, D, U }
+/**
+ * 客户分层（与线上知行朋友圈六层语义对齐）：
+ * S=成交高价值（每季度维护） A=高意向（每周） B=已接触（每2周） C=信息完整（每月） D=线索（每2周联系） V=已成交（售后定期） U=未分类（纯本地状态，不同步）
+ * 注意：B/C/D 是接触深度递进漏斗（线索→信息完整→已接触），不是意向从高到低。
+ */
+enum class IntentLevel { S, A, B, C, D, V, U }
 
 @Entity(
     tableName = "customers",

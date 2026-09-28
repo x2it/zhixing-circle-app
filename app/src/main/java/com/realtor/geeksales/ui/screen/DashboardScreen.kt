@@ -36,7 +36,9 @@ import com.realtor.geeksales.ui.theme.IntentA
 import com.realtor.geeksales.ui.theme.IntentB
 import com.realtor.geeksales.ui.theme.IntentC
 import com.realtor.geeksales.ui.theme.IntentD
+import com.realtor.geeksales.ui.theme.IntentS
 import com.realtor.geeksales.ui.theme.IntentU
+import com.realtor.geeksales.ui.theme.IntentV
 import com.realtor.geeksales.ui.theme.Success
 import com.realtor.geeksales.ui.theme.TextPrimary
 import com.realtor.geeksales.ui.theme.Warning
@@ -88,11 +90,13 @@ fun DashboardScreen(
 
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("意向分布", color = Accent, style = MaterialTheme.typography.labelMedium)
+                    Text("分层分布（S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交 U未分类）", color = Accent, style = MaterialTheme.typography.labelMedium)
+                    IntentRow("S", intentMap["S"] ?: 0, IntentS, maxCount)
                     IntentRow("A", intentMap["A"] ?: 0, IntentA, maxCount)
                     IntentRow("B", intentMap["B"] ?: 0, IntentB, maxCount)
                     IntentRow("C", intentMap["C"] ?: 0, IntentC, maxCount)
                     IntentRow("D", intentMap["D"] ?: 0, IntentD, maxCount)
+                    IntentRow("V", intentMap["V"] ?: 0, IntentV, maxCount)
                     IntentRow("U", intentMap["U"] ?: 0, IntentU, maxCount)
                 }
             }

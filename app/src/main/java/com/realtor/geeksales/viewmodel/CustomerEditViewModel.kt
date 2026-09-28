@@ -60,6 +60,10 @@ class CustomerEditViewModel @Inject constructor(
     private val _schema = MutableStateFlow(schemaStore.current())
     val schema: StateFlow<List<FieldDef>> = _schema
 
+    /** 模板元数据（分层 tiers / 身份标签 / 属性标签），驱动等级 chips 与标签选择器 */
+    private val _templateMeta = MutableStateFlow(schemaStore.meta())
+    val templateMeta: StateFlow<com.realtor.geeksales.data.schema.TemplateMeta> = _templateMeta
+
     val savedOk = MutableStateFlow(false)
 
     private var loadedId = -1L

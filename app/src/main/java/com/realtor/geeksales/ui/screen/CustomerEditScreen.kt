@@ -3,6 +3,7 @@ package com.realtor.geeksales.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -120,7 +122,39 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
         BuiltinKeys.AGE -> GeekTextField(form.age, { vm.update { s -> s.copy(age = it) } }, label = f.label, placeholder = "30")
         BuiltinKeys.WECHAT -> GeekTextField(form.wechat, { vm.update { s -> s.copy(wechat = it) } }, label = f.label)
         BuiltinKeys.SOURCE -> GeekTextField(form.source, { vm.update { s -> s.copy(source = it) } }, label = f.label, placeholder = "端口-安居客/朋友转介绍/到访…")
-        BuiltinKeys.TAGS -> GeekTextField(form.tags, { vm.update { s -> s.copy(tags = it) } }, label = "${f.label} (逗号分隔)", placeholder = "学区房, 地铁, 急售")
+        BuiltinKeys.TAGS -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 模板标签选择器：身份标签 + 属性标签（线上模板下发，随模板自动适配）
+            val meta = vm.templateMeta.collectAsState().value
+            val templateTags = meta.allTags
+            if (templateTags.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    templateTags.forEach { tag ->
+                        val selected = form.tags.split(',', '，').map { it.trim() }.contains(tag)
+                        androidx.compose.runtime.key(tag) {
+                            Text(
+                                text = tag,
+                                color = if (selected) Accent else TextSecondary,
+                                modifier = Modifier
+                                    .background(if (selected) Accent.copy(alpha = 0.16f) else BgElev2)
+                                    .border(1.dp, if (selected) Accent else Divider)
+                                    .clickable {
+                                        val current = form.tags.split(',', '，').map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
+                                        if (tag in current) current.remove(tag) else current.add(tag)
+                                        vm.update { s -> s.copy(tags = current.joinToString(",")) }
+                                    }
+                                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+            GeekTextField(
+                form.tags, { vm.update { s -> s.copy(tags = it) } },
+                label = "${f.label} (逗号分隔，可自定义)", placeholder = "学区房, 地铁, 急售"
+            )
+        }
         BuiltinKeys.EMAIL -> GeekTextField(form.email, { vm.update { s -> s.copy(email = it) } }, label = f.label, placeholder = "name@example.com")
         BuiltinKeys.IM -> GeekTextField(form.im, { vm.update { s -> s.copy(im = it) } }, label = f.label, placeholder = "微信/QQ")
         BuiltinKeys.COMPANY -> GeekTextField(form.company, { vm.update { s -> s.copy(company = it) } }, label = f.label, placeholder = "公司/门店")
@@ -135,27 +169,33 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
         BuiltinKeys.HOUSE_TYPE -> GeekTextField(form.houseType, { vm.update { s -> s.copy(houseType = it) } }, label = f.label, placeholder = "三居/叠拼/平层")
         BuiltinKeys.TARGET_PROJECT -> GeekTextField(form.targetProject, { vm.update { s -> s.copy(targetProject = it) } }, label = f.label)
         BuiltinKeys.INTENT_LEVEL -> {
+            // 六层语义（线上对齐）：S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交；U为纯本地状态
             val labels = mapOf(
-                IntentLevel.A to "A 强烈", IntentLevel.B to "B 一般", IntentLevel.C to "C 弱",
-                IntentLevel.D to "D 无效", IntentLevel.U to "U 未评"
+                IntentLevel.S to "S 成交高价值", IntentLevel.A to "A 高意向", IntentLevel.B to "B 已接触",
+                IntentLevel.C to "C 信息完整", IntentLevel.D to "D 线索", IntentLevel.V to "V 已成交",
+                IntentLevel.U to "U 未分类"
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(IntentLevel.A, IntentLevel.B, IntentLevel.C, IntentLevel.D, IntentLevel.U).forEach { lvl ->
-                    val on = form.intentLevel == lvl
-                    val lvlColor = intentColor(lvl)
-                    androidx.compose.runtime.key(lvl) {
-                        Text(
-                            text = labels[lvl] ?: lvl.name,
-                            color = if (on) lvlColor else TextSecondary,
-                            modifier = Modifier
-                                .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)
-                                .border(1.dp, if (on) lvlColor else Divider)
-                                .clickable { vm.update { s -> s.copy(intentLevel = lvl) } }
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1
-                        )
+            val levels = listOf(IntentLevel.S, IntentLevel.A, IntentLevel.B, IntentLevel.C, IntentLevel.D, IntentLevel.V, IntentLevel.U)
+            // 两行展示：主层级（S-A-B-C）+ 收尾（D-V-U）
+            listOf(levels.take(4), levels.drop(4)).forEach { rowLevels ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rowLevels.forEach { lvl ->
+                        val on = form.intentLevel == lvl
+                        val lvlColor = intentColor(lvl)
+                        androidx.compose.runtime.key(lvl) {
+                            Text(
+                                text = labels[lvl] ?: lvl.name,
+                                color = if (on) lvlColor else TextSecondary,
+                                modifier = Modifier
+                                    .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)
+                                    .border(1.dp, if (on) lvlColor else Divider)
+                                    .clickable { vm.update { s -> s.copy(intentLevel = lvl) } }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }

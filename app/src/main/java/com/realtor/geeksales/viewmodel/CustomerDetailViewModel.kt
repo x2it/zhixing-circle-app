@@ -37,6 +37,11 @@ class CustomerDetailViewModel @Inject constructor(
     private val _schema = MutableStateFlow(schemaStore.current())
     val schema: StateFlow<List<FieldDef>> = _schema
 
+    /** 客户标签（详情页展示，与线上 tagIds 对应） */
+    val tags = idFlow.flatMapLatest { id ->
+        if (id <= 0) flowOf<List<String>>(emptyList()) else repo.observeTagsOf(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     fun setCustomerId(id: Long) {
         if (id != idFlow.value) idFlow.value = id
     }

@@ -42,6 +42,9 @@ interface CustomerDao {
         SELECT * FROM customers 
         WHERE (:query IS NULL OR (name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR targetProject LIKE '%' || :query || '%' OR areaPref LIKE '%' || :query || '%'))
           AND (:level IS NULL OR intentLevel = :level)
+          AND (:tagName IS NULL OR EXISTS (
+                SELECT 1 FROM customer_tag_map ct JOIN tags t ON t.id = ct.tagId
+                WHERE ct.customerId = customers.id AND t.name = :tagName))
           AND (:onlyOverdue = 0 OR (nextFollowAt IS NOT NULL AND nextFollowAt <= :now))
           AND (:onlyQueued = 0 OR queued = 1)
           AND (:onlyCalledToday = 0 OR (lastDialAt IS NOT NULL AND lastDialAt >= :todayStart))
@@ -55,6 +58,7 @@ interface CustomerDao {
     fun observeFiltered(
         query: String? = null,
         level: IntentLevel? = null,
+        tagName: String? = null,
         onlyOverdue: Int = 0,
         onlyQueued: Int = 0,
         onlyCalledToday: Int = 0,
@@ -67,6 +71,9 @@ interface CustomerDao {
         SELECT * FROM customers 
         WHERE (:query IS NULL OR (name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR targetProject LIKE '%' || :query || '%' OR areaPref LIKE '%' || :query || '%'))
           AND (:level IS NULL OR intentLevel = :level)
+          AND (:tagName IS NULL OR EXISTS (
+                SELECT 1 FROM customer_tag_map ct JOIN tags t ON t.id = ct.tagId
+                WHERE ct.customerId = customers.id AND t.name = :tagName))
           AND (:onlyOverdue = 0 OR (nextFollowAt IS NOT NULL AND nextFollowAt <= :now))
           AND (:onlyQueued = 0 OR queued = 1)
           AND (:onlyCalledToday = 0 OR (lastDialAt IS NOT NULL AND lastDialAt >= :todayStart))
@@ -76,6 +83,7 @@ interface CustomerDao {
     suspend fun getFilteredForExport(
         query: String? = null,
         level: IntentLevel? = null,
+        tagName: String? = null,
         onlyOverdue: Int = 0,
         onlyQueued: Int = 0,
         onlyCalledToday: Int = 0,

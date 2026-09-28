@@ -36,7 +36,39 @@ data class WbContact(
     @SerialName("tagIds") val tagIds: List<String> = emptyList(),
     val memo: String? = null,
     /** 自定义扩展字段（线上模板自定义字段，key→value） */
-    @SerialName("customFields") val customFields: Map<String, String> = emptyMap()
+    @SerialName("customFields") val customFields: Map<String, String> = emptyMap(),
+    /** 幂等键：App 端传本地记录 ID（tma-<id>），重复上传不会产生重复数据 */
+    @SerialName("externalId") val externalId: String? = null
+)
+
+/** 线上模板元数据：tiers（分层）/ identityTags（身份标签）/ attributeTags（属性标签），驱动 App 筛选与标签选择器 */
+data class WbSchemaBundle(
+    val fields: List<WbRemoteField> = emptyList(),
+    val tiers: List<String> = listOf("S", "A", "B", "C", "D", "V", "U"),
+    val identityTags: List<String> = emptyList(),
+    val attributeTags: List<String> = emptyList()
+)
+
+/** 批量接口响应（POST /contacts/batch、/followups/batch）：逐条独立处理，errors 含失败明细 */
+@Serializable
+data class WbBatchContactResult(
+    val id: String = "",
+    val name: String = "",
+    val tier: String? = null,
+    val tags: List<WbTag> = emptyList()
+)
+
+@Serializable
+data class WbBatchError(
+    val index: Int = -1,
+    val message: String = ""
+)
+
+@Serializable
+data class WbBatchResponse(
+    val items: List<WbBatchContactResult> = emptyList(),
+    val errors: List<WbBatchError> = emptyList(),
+    val created: Int = 0
 )
 
 @Serializable
@@ -251,16 +283,7 @@ class WorkbuddyApi @Inject constructor(
 
     /** 推送一条跟进记录（通话登记历史） */
     suspend fun createFollowup(f: WbFollowup): WbResult<Unit> = withContext(Dispatchers.IO) {
-        val body = buildString {
-            append("{")
-            append("\"contactId\":\"${esc(f.contactId)}\",")
-            append("\"content\":\"${esc(f.content)}\",")
-            if (!f.followupType.isNullOrBlank()) append("\"followupType\":\"${esc(f.followupType)}\",")
-            if (!f.followupDate.isNullOrBlank()) append("\"followupDate\":\"${esc(f.followupDate)}\",")
-            if (!f.nextFollowupDate.isNullOrBlank()) append("\"nextFollowupDate\":\"${esc(f.nextFollowupDate)}\"")
-            append("}")
-        }
-        val resp = post("/followups", body)
+        val resp = post("/followups", buildFollowupJson(f))
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
         if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
     }
@@ -311,13 +334,13 @@ class WorkbuddyApi @Inject constructor(
         else WbResult.Success(v)
     }
 
-    /** 拉取线上模板字段定义（GET /api/schema）；兼容 items/fields/直接数组 三种响应 */
-    suspend fun fetchSchema(): WbResult<List<WbRemoteField>> = withContext(Dispatchers.IO) {
+    /** 拉取线上模板：字段定义 + 分层 tiers + 身份/属性标签（GET /api/schema） */
+    suspend fun fetchSchema(): WbResult<WbSchemaBundle> = withContext(Dispatchers.IO) {
         val body = get("/schema")
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        val root = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
         val arr = runCatching {
-            val el = json.parseToJsonElement(body)
-            when (el) {
+            when (val el = json.parseToJsonElement(body)) {
                 is JsonArray -> el
                 is JsonObject -> el["items"] as? JsonArray ?: el["fields"] as? JsonArray ?: JsonArray(emptyList())
                 else -> JsonArray(emptyList())
@@ -337,7 +360,16 @@ class WorkbuddyApi @Inject constructor(
                 )
             }.getOrNull()
         }.filter { it.key.isNotBlank() }
-        WbResult.Success(list)
+        fun strList(k: String): List<String> =
+            (root?.get(k) as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
+        WbResult.Success(
+            WbSchemaBundle(
+                fields = list,
+                tiers = strList("tiers").ifEmpty { strList("levels") }.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
+                identityTags = strList("identityTags"),
+                attributeTags = strList("attributeTags")
+            )
+        )
     }
 
     /** 推送自定义字段定义到线上模板（POST /api/schema/fields），线上模板即字段集 */
@@ -358,6 +390,38 @@ class WorkbuddyApi @Inject constructor(
         if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
     }
 
+    /**
+     * 批量上传联系人（POST /api/contacts/batch）。
+     * 单次 ≤100 条；externalId 幂等（同 externalId 重复上传直接返回已存在对象）；
+     * 逐条独立处理，失败明细在 errors 中，不影响其余。
+     */
+    suspend fun createContactsBatch(items: List<WbContact>): WbResult<WbBatchResponse> =
+        withContext(Dispatchers.IO) {
+            if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
+            val body = "{\"items\":[" + items.joinToString(",") { buildContactJson(it) } + "]}"
+            val resp = post("/contacts/batch", body)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            runCatching { json.decodeFromString<WbBatchResponse>(resp) }
+                .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
+                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+        }
+
+    /** 批量上传跟进记录（POST /api/followups/batch），≤100 条/批 */
+    suspend fun createFollowupsBatch(items: List<WbFollowup>): WbResult<WbBatchResponse> =
+        withContext(Dispatchers.IO) {
+            if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
+            if (items.size > 100) return@withContext WbResult.Error("批量上传单次最多 100 条，请分批")
+            val body = "{\"items\":[" + items.joinToString(",") { buildFollowupJson(it) } + "]}"
+            val resp = post("/followups/batch", body)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            runCatching { json.decodeFromString<WbBatchResponse>(resp) }
+                .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
+                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+        }
+
     // ---- 底层 HTTP ----
     private fun buildContactJson(c: WbContact): String {
         val parts = mutableListOf<String>()
@@ -373,6 +437,7 @@ class WorkbuddyApi @Inject constructor(
         put("source", c.source)
         put("nextFollowupDate", c.nextFollowupDate)
         put("memo", c.memo)
+        put("externalId", c.externalId)
         if (c.tagIds.isNotEmpty()) {
             parts.add("\"tagIds\":[${c.tagIds.joinToString(",") { "\"${esc(it)}\"" }}]")
         }
@@ -381,6 +446,16 @@ class WorkbuddyApi @Inject constructor(
             parts.add("\"customFields\":{$cf}")
         }
         return "{" + parts.joinToString(",") + "}"
+    }
+
+    private fun buildFollowupJson(f: WbFollowup): String = buildString {
+        append("{")
+        append("\"contactId\":\"${esc(f.contactId)}\",")
+        append("\"content\":\"${esc(f.content)}\",")
+        if (!f.followupType.isNullOrBlank()) append("\"followupType\":\"${esc(f.followupType)}\",")
+        if (!f.followupDate.isNullOrBlank()) append("\"followupDate\":\"${esc(f.followupDate)}\",")
+        if (!f.nextFollowupDate.isNullOrBlank()) append("\"nextFollowupDate\":\"${esc(f.nextFollowupDate)}\"")
+        append("}")
     }
 
     private fun esc(s: String): String = buildString(s.length) {
@@ -404,7 +479,9 @@ class WorkbuddyApi @Inject constructor(
         val key = apiKeyStore.load() ?: return null
         val b = Request.Builder()
             .url(baseUrl() + path)
+            // 双头兼容：X-API-Key（早期约定）+ Authorization: Bearer（线上官方推荐）
             .header("X-API-Key", key)
+            .header("Authorization", "Bearer $key")
             .header("Accept", "application/json")
             .method(method, body?.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()

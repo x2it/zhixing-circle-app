@@ -39,6 +39,8 @@ import com.realtor.geeksales.ui.theme.BgElev2
 import com.realtor.geeksales.ui.theme.Danger
 import com.realtor.geeksales.ui.theme.Divider
 import com.realtor.geeksales.ui.theme.IntentA
+import com.realtor.geeksales.ui.theme.IntentS
+import com.realtor.geeksales.ui.theme.IntentV
 import com.realtor.geeksales.ui.theme.IntentB
 import com.realtor.geeksales.ui.theme.IntentC
 import com.realtor.geeksales.ui.theme.IntentD
@@ -188,15 +190,17 @@ fun GeekChip(text: String, color: Color = Accent, onClick: (() -> Unit)? = null)
 
 /**
  * 意向等级徽标（紧凑版）：单字母色块，用于列表/队列等密集场景。
- * 颜色即语义：A 绿=B 蓝=C 黄=D 红=U 灰，完整含义在详情页查看。
+ * 颜色即语义：S 金=A 绿=B 蓝=C 黄=D 红=V 紫=U 灰，完整含义在详情页查看。
  */
 @Composable
 fun IntentLevelBadge(level: IntentLevel) {
     val (c, label) = when (level) {
+        IntentLevel.S -> IntentS to "S"
         IntentLevel.A -> IntentA to "A"
         IntentLevel.B -> IntentB to "B"
         IntentLevel.C -> IntentC to "C"
         IntentLevel.D -> IntentD to "D"
+        IntentLevel.V -> IntentV to "V"
         IntentLevel.U -> IntentU to "U"
     }
     Text(
@@ -216,11 +220,13 @@ fun IntentLevelBadge(level: IntentLevel) {
 @Composable
 fun IntentLevelChip(level: IntentLevel) {
     val (c, label) = when (level) {
-        IntentLevel.A -> IntentA to "A · 强烈意向"
-        IntentLevel.B -> IntentB to "B · 一般意向"
-        IntentLevel.C -> IntentC to "C · 弱意向"
-        IntentLevel.D -> IntentD to "D · 无效"
-        IntentLevel.U -> IntentU to "U · 未评级"
+        IntentLevel.S -> IntentS to "S · 成交高价值"
+        IntentLevel.A -> IntentA to "A · 高意向"
+        IntentLevel.B -> IntentB to "B · 已接触"
+        IntentLevel.C -> IntentC to "C · 信息完整"
+        IntentLevel.D -> IntentD to "D · 线索"
+        IntentLevel.V -> IntentV to "V · 已成交"
+        IntentLevel.U -> IntentU to "U · 未分类"
     }
     GeekChip(text = label, color = c)
 }
@@ -356,10 +362,12 @@ fun StatusDotLabel(text: String, color: Color) {
 }
 
 fun intentColor(level: IntentLevel): Color = when (level) {
+    IntentLevel.S -> IntentS
     IntentLevel.A -> IntentA
     IntentLevel.B -> IntentB
     IntentLevel.C -> IntentC
     IntentLevel.D -> IntentD
+    IntentLevel.V -> IntentV
     IntentLevel.U -> IntentU
 }
 

@@ -96,10 +96,10 @@ class CsvManager @Inject constructor(
                     val houseType = cells.getOrNull(10)?.trim().takeIf { !it.isNullOrBlank() }
                     val targetProject = cells.getOrNull(11)?.trim().takeIf { !it.isNullOrBlank() }
                     val level = when (cells.getOrNull(12)?.trim()?.uppercase()) {
-                        "A" -> IntentLevel.A
+                        "S" -> IntentLevel.S; "A" -> IntentLevel.A
                         "B" -> IntentLevel.B
                         "C" -> IntentLevel.C
-                        "D" -> IntentLevel.D
+                        "D" -> IntentLevel.D; "V" -> IntentLevel.V
                         else -> IntentLevel.U
                     }
                     val note = cells.getOrNull(13)?.trim().takeIf { !it.isNullOrBlank() }

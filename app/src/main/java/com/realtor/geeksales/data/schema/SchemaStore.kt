@@ -32,6 +32,19 @@ data class FieldDef(
     val builtin: Boolean = true
 )
 
+/** 模板元数据：分层（tiers）+ 身份标签 + 属性标签（线上模板下发，驱动筛选 chips 与标签选择器） */
+data class TemplateMeta(
+    /** 分层选项：S/A/B/C/D/V/U（顺序即展示顺序） */
+    val tiers: List<String> = listOf("S", "A", "B", "C", "D", "V", "U"),
+    /** 身份标签：买房客户 / 卖房业主 / 租客 / 业主 / 中介同行 */
+    val identityTags: List<String> = emptyList(),
+    /** 属性标签：学区房 / 地铁房 / 改善型 … */
+    val attributeTags: List<String> = emptyList()
+) {
+    /** 全部模板标签（身份 + 属性，去重保序），供编辑页标签选择器 */
+    val allTags: List<String> get() = (identityTags + attributeTags).distinct()
+}
+
 /** 内置字段 key 集合（值存 Customer 主表列） */
 object BuiltinKeys {
     const val NAME = "name"
@@ -72,6 +85,7 @@ object BuiltinKeys {
  * Schema 存储：内置默认模板（离线可用）+ 线上模板拉取合并 + 本地自定义字段。
  * 合并规则：内置字段的 label/order 可被线上覆盖；线上新增的 key 追加为扩展字段；
  * 本地自定义字段（数据页添加）始终保留。
+ * 另存模板元数据（分层 tiers / 身份标签 / 属性标签），驱动列表筛选与编辑页标签选择器。
  */
 @Singleton
 class SchemaStore @Inject constructor(
@@ -82,6 +96,33 @@ class SchemaStore @Inject constructor(
     private companion object {
         const val KEY_SCHEMA = "schema_json_v1"
         const val KEY_LOCAL_FIELDS = "schema_local_fields_v1"
+        const val KEY_META = "schema_meta_v1"
+    }
+
+    /** 默认模板元数据（房产模板；线上模板下发后以线上为准） */
+    fun defaultMeta(): TemplateMeta = TemplateMeta(
+        tiers = listOf("S", "A", "B", "C", "D", "V", "U"),
+        identityTags = listOf("买房客户", "卖房业主", "租客", "业主", "中介同行"),
+        attributeTags = listOf("学区房", "地铁房", "改善型", "刚需", "投资", "首套", "二套")
+    )
+
+    /** 当前模板元数据（本地缓存或默认） */
+    fun meta(): TemplateMeta {
+        val raw = prefs.getString(KEY_META, null)
+        if (raw.isNullOrBlank()) return defaultMeta()
+        val parts = raw.split("~")
+        if (parts.size < 3) return defaultMeta()
+        fun list(s: String) = s.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        return TemplateMeta(
+            tiers = list(parts[0]).ifEmpty { defaultMeta().tiers },
+            identityTags = list(parts[1]),
+            attributeTags = list(parts[2])
+        )
+    }
+
+    fun saveMeta(m: TemplateMeta) {
+        fun join(l: List<String>) = l.joinToString(",")
+        prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}").apply()
     }
 
     /** 内置默认模板（房产销售场景，开箱即用） */

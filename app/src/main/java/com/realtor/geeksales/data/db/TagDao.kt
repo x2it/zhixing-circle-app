@@ -18,6 +18,9 @@ interface TagDao {
     @Query("SELECT t.* FROM tags t INNER JOIN customer_tag_map m ON t.id = m.tagId WHERE m.customerId = :customerId ORDER BY t.name ASC")
     suspend fun getForCustomer(customerId: Long): List<Tag>
 
+    @Query("SELECT t.* FROM tags t INNER JOIN customer_tag_map m ON t.id = m.tagId WHERE m.customerId = :customerId ORDER BY t.name ASC")
+    fun observeForCustomer(customerId: Long): Flow<List<Tag>>
+
     @Query("SELECT * FROM tags WHERE name = :name LIMIT 1")
     suspend fun getByName(name: String): Tag?
 

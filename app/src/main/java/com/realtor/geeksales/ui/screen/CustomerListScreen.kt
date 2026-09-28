@@ -3,6 +3,7 @@ package com.realtor.geeksales.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -65,16 +67,18 @@ fun CustomerListScreen(
 ) {
     var q by remember { mutableStateOf("") }
     var level by remember { mutableStateOf<IntentLevel?>(null) }
+    var tagName by remember { mutableStateOf<String?>(null) }
     var onlyOverdue by remember { mutableStateOf(false) }
     var onlyQueued by remember { mutableStateOf(false) }
     var onlyCalledToday by remember { mutableStateOf(false) }
     var onlyNotCalled by remember { mutableStateOf(false) }
     val list by vm.customers.collectAsStateWithLifecycle()
     val count by vm.totalCount.collectAsStateWithLifecycle()
+    val allTags by vm.allTags.collectAsStateWithLifecycle()
 
-    LaunchedEffect(q, level, onlyOverdue, onlyQueued, onlyCalledToday, onlyNotCalled) {
+    LaunchedEffect(q, level, tagName, onlyOverdue, onlyQueued, onlyCalledToday, onlyNotCalled) {
         delay(300)
-        vm.setFilter(CustomerFilter(q, level, onlyOverdue, onlyQueued, onlyCalledToday, onlyNotCalled))
+        vm.setFilter(CustomerFilter(q, level, tagName, onlyOverdue, onlyQueued, onlyCalledToday, onlyNotCalled))
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
@@ -83,12 +87,45 @@ fun CustomerListScreen(
         })
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             GeekTextField(q, { q = it }, placeholder = "搜：姓名 / 电话 / 楼盘 / 区域")
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 分层筛选（六层语义：S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交 U未分类）
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                LevelFilterChip("S", IntentLevel.S, level) { level = if (level == it) null else it }
                 LevelFilterChip("A", IntentLevel.A, level) { level = if (level == it) null else it }
                 LevelFilterChip("B", IntentLevel.B, level) { level = if (level == it) null else it }
                 LevelFilterChip("C", IntentLevel.C, level) { level = if (level == it) null else it }
                 LevelFilterChip("D", IntentLevel.D, level) { level = if (level == it) null else it }
+                LevelFilterChip("V", IntentLevel.V, level) { level = if (level == it) null else it }
                 LevelFilterChip("U", IntentLevel.U, level) { level = if (level == it) null else it }
+                if (level != null || tagName != null) {
+                    Text(
+                        "清除筛选",
+                        color = Warning,
+                        modifier = Modifier
+                            .clickable { level = null; tagName = null }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+            // 标签筛选（独立于分层的维度）
+            if (allTags.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    Text("#", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(vertical = 6.dp))
+                    allTags.forEach { t ->
+                        val on = tagName == t.name
+                        Text(
+                            text = t.name,
+                            color = if (on) Accent else TextSecondary,
+                            modifier = Modifier
+                                .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
+                                .border(1.dp, if (on) Accent else Divider)
+                                .clickable { tagName = if (on) null else t.name }
+                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ToggleChip("待跟进过期", onlyOverdue, Warning) { onlyOverdue = !onlyOverdue }

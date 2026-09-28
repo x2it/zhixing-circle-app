@@ -16,6 +16,7 @@ import com.realtor.geeksales.data.db.Tag
 import com.realtor.geeksales.data.db.TagDao
 import com.realtor.geeksales.util.Formatter
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,6 +31,7 @@ class CustomerRepository @Inject constructor(
     fun observeFiltered(
         query: String?,
         level: IntentLevel?,
+        tagName: String?,
         onlyOverdue: Boolean,
         onlyQueued: Boolean,
         onlyCalledToday: Boolean = false,
@@ -38,6 +40,7 @@ class CustomerRepository @Inject constructor(
     ): Flow<List<Customer>> = customerDao.observeFiltered(
         query = query?.takeIf { it.isNotBlank() },
         level = level,
+        tagName = tagName?.takeIf { it.isNotBlank() },
         onlyOverdue = if (onlyOverdue) 1 else 0,
         onlyQueued = if (onlyQueued) 1 else 0,
         onlyCalledToday = if (onlyCalledToday) 1 else 0,
@@ -51,6 +54,7 @@ class CustomerRepository @Inject constructor(
     suspend fun getFilteredForExport(
         query: String?,
         level: IntentLevel?,
+        tagName: String?,
         onlyOverdue: Boolean,
         onlyQueued: Boolean,
         onlyCalledToday: Boolean = false,
@@ -60,6 +64,7 @@ class CustomerRepository @Inject constructor(
     ): List<Customer> = customerDao.getFilteredForExport(
         query = query?.takeIf { it.isNotBlank() },
         level = level,
+        tagName = tagName?.takeIf { it.isNotBlank() },
         onlyOverdue = if (onlyOverdue) 1 else 0,
         onlyQueued = if (onlyQueued) 1 else 0,
         onlyCalledToday = if (onlyCalledToday) 1 else 0,
@@ -104,6 +109,10 @@ class CustomerRepository @Inject constructor(
     /** 读取客户现有标签名，用于编辑页回显（避免保存时误删原标签） */
     suspend fun tagsOf(customerId: Long): List<String> =
         tagDao.getForCustomer(customerId).map { it.name }
+
+    /** 某客户的标签（响应式，详情页展示用） */
+    fun observeTagsOf(customerId: Long): Flow<List<String>> =
+        tagDao.observeForCustomer(customerId).map { list -> list.map { it.name } }
 
     /** 仅给客户挂标签（不重写客户数据），用于通讯录导入的群组映射等批量场景 */
     suspend fun applyTags(customerId: Long, tags: List<String>) {
@@ -192,14 +201,14 @@ class CustomerRepository @Inject constructor(
                 fromPostCall = fromPostCall
             )
         )
-        // 同步 Customer 的下次跟进时间
+        // 同步 Customer 的下次跟进时间（六层语义：A高意向 B已接触 C信息完整；错号/停机/未接通不误标层级）
         val c = customerDao.getById(customerId) ?: return
         val level = when (result) {
             FollowResult.APPOINTMENT, FollowResult.CONNECTED -> IntentLevel.A
             FollowResult.PENDING -> IntentLevel.B
             FollowResult.NOT_INTERESTED -> IntentLevel.C
-            FollowResult.WRONG_NUMBER, FollowResult.SHUTDOWN -> IntentLevel.D
-            FollowResult.NOT_REACHED -> IntentLevel.U
+            // 错号/停机/未接通 → U（未分类），保留用户手动分层
+            FollowResult.WRONG_NUMBER, FollowResult.SHUTDOWN, FollowResult.NOT_REACHED -> IntentLevel.U
         }
         customerDao.upsert(
             c.copy(
@@ -249,6 +258,8 @@ class CustomerRepository @Inject constructor(
 
     // ---- 时光机快照/恢复 ----
     suspend fun allTags(): List<Tag> = tagDao.getAll()
+
+    fun observeAllTags(): Flow<List<Tag>> = tagDao.observeAll()
 
     suspend fun allTagMappings(): List<CustomerTagMap> = tagDao.getAllMappings()
 

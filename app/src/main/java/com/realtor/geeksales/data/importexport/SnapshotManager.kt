@@ -253,8 +253,8 @@ class SnapshotManager @Inject constructor(
             val norm = Formatter.normalizePhone(phone)
             if (!seen.add(norm)) continue
             val level = when (row.getCell(12)?.str()?.trim()?.uppercase()) {
-                "A" -> IntentLevel.A; "B" -> IntentLevel.B; "C" -> IntentLevel.C
-                "D" -> IntentLevel.D; else -> IntentLevel.U
+                "S" -> IntentLevel.S; "A" -> IntentLevel.A; "B" -> IntentLevel.B; "C" -> IntentLevel.C
+                "D" -> IntentLevel.D; "V" -> IntentLevel.V; else -> IntentLevel.U
             }
             parsed += Customer(
                 name = name, phone = phone, phoneNormalized = norm,

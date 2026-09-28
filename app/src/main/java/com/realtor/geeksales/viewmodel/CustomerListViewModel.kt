@@ -23,6 +23,7 @@ import javax.inject.Inject
 data class CustomerFilter(
     val query: String = "",
     val level: IntentLevel? = null,
+    val tagName: String? = null,
     val onlyOverdue: Boolean = false,
     val onlyQueued: Boolean = false,
     val onlyCalledToday: Boolean = false,
@@ -45,6 +46,7 @@ class CustomerListViewModel @Inject constructor(
                 repo.observeFiltered(
                     query = f.query,
                     level = f.level,
+                    tagName = f.tagName,
                     onlyOverdue = f.onlyOverdue,
                     onlyQueued = f.onlyQueued,
                     onlyCalledToday = f.onlyCalledToday,
@@ -59,12 +61,17 @@ class CustomerListViewModel @Inject constructor(
     val totalCount = repo.observeCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    /** 本地全部标签（列表按标签筛选的数据源） */
+    val allTags = repo.observeAllTags()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     fun setFilter(f: CustomerFilter) { filter.value = f }
     fun tickNow() { nowTick.value = System.currentTimeMillis() }
 
     suspend fun getFilteredForExport(): List<Customer> = repo.getFilteredForExport(
         query = filter.value.query,
         level = filter.value.level,
+        tagName = filter.value.tagName,
         onlyOverdue = filter.value.onlyOverdue,
         onlyQueued = filter.value.onlyQueued,
         onlyCalledToday = filter.value.onlyCalledToday,
