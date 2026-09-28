@@ -95,7 +95,7 @@ fun CustomerListScreen(
                 LevelFilterChip("C", IntentLevel.C, level) { level = if (level == it) null else it }
                 LevelFilterChip("D", IntentLevel.D, level) { level = if (level == it) null else it }
                 LevelFilterChip("V", IntentLevel.V, level) { level = if (level == it) null else it }
-                LevelFilterChip("U", IntentLevel.U, level) { level = if (level == it) null else it }
+                LevelFilterChip("/", IntentLevel.U, level) { level = if (level == it) null else it }
                 if (level != null || tagName != null) {
                     Text(
                         "清除筛选",

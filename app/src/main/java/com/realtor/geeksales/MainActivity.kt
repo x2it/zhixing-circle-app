@@ -115,8 +115,9 @@ private fun AppRoot() {
 
     // 首次启动（合规同意后）引导核心权限：
     // READ_PHONE_STATE 缺失会导致挂断不弹登记卡片且无任何提示（"功能没反应"的直接来源）；
+    // CALL_PHONE 用于详情页「直接拨打」（默认拨号盘 ACTION_DIAL 不需要，拒绝也不影响）；
     // READ_CALL_LOG 用于 Android 12+ 获取呼入号码；POST_NOTIFICATIONS 用于跟进提醒。
-    // 只请求一次，用户拒绝后可在设置页手动开启。
+    // 只请求一次，用户拒绝后可在设置页手动开启；设置页会实时显示各项授权状态。
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { }
@@ -130,6 +131,7 @@ private fun AppRoot() {
                 permLauncher.launch(
                     arrayOf(
                         Manifest.permission.READ_PHONE_STATE,
+                        Manifest.permission.CALL_PHONE,
                         Manifest.permission.READ_CALL_LOG,
                         Manifest.permission.POST_NOTIFICATIONS
                     )

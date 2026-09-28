@@ -41,9 +41,16 @@ class DialerHelper @Inject constructor(
             .onFailure { Log.w(TAG, "openDialer failed", it) }
     }
 
-    /** 直接发起 CALL：需要 Manifest.permission.CALL_PHONE 运行时授权。 */
+    /** 直接发起 CALL：需要 Manifest.permission.CALL_PHONE 运行时授权。无权限时安全跳过（不发意图），由 UI 层引导授权。 */
     fun directCall(phone: String) {
         lastDialedPhone = normalize(phone)
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.CALL_PHONE
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "directCall skipped: CALL_PHONE not granted")
+            return
+        }
         val i = Intent(Intent.ACTION_CALL, Uri.parse("tel:${normalize(phone)}"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { ctx.startActivity(i) }

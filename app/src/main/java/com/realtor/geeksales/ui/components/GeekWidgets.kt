@@ -201,7 +201,7 @@ fun IntentLevelBadge(level: IntentLevel) {
         IntentLevel.C -> IntentC to "C"
         IntentLevel.D -> IntentD to "D"
         IntentLevel.V -> IntentV to "V"
-        IntentLevel.U -> IntentU to "U"
+        IntentLevel.U -> IntentU to "/"
     }
     Text(
         text = label,
@@ -226,7 +226,7 @@ fun IntentLevelChip(level: IntentLevel) {
         IntentLevel.C -> IntentC to "C · 信息完整"
         IntentLevel.D -> IntentD to "D · 线索"
         IntentLevel.V -> IntentV to "V · 已成交"
-        IntentLevel.U -> IntentU to "U · 未分类"
+        IntentLevel.U -> IntentU to "/ · 未分类"
     }
     GeekChip(text = label, color = c)
 }

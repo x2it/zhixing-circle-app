@@ -180,6 +180,9 @@ class CustomerRepository @Inject constructor(
 
     fun observeCount() = customerDao.observeCount()
 
+    /** 一次性取本地联系人总数（同步汇总用，不建立持续订阅） */
+    suspend fun countOnce(): Int = customerDao.countOnce()
+
     suspend fun getAll() = customerDao.getAll()
 
     suspend fun getByPhoneNormalized(p: String) = customerDao.getByPhoneNormalized(p)

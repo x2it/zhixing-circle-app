@@ -47,6 +47,8 @@ data class IOStatus(
     val exportCount: Int? = null,
     /** 最近一次同步的明细（知行朋友圈） */
     val syncSummary: String? = null,
+    /** 是否同步失败/部分失败（UI 显示为警示色，不再误报纯成功） */
+    val isError: Boolean = false,
     /** 进度 0..1；null 表示不确定进度（转圈） */
     val progress: Float? = null
 )
@@ -682,6 +684,7 @@ class ImportExportViewModel @Inject constructor(
     // ---- 服务器地址（平台迁移时切换，不写死）----
     fun baseUrl(): String = wbApi.baseUrl()
     fun setBaseUrl(url: String) = wbApi.setBaseUrl(url)
+    fun resetBaseUrl() = wbApi.resetBaseUrl()
 
     /** 自动备份：全字段 XLSX 写入系统下载目录（MediaStore），返回文件名 */
     suspend fun backupToDownloads(): String? = withContext(Dispatchers.IO) {
@@ -829,9 +832,11 @@ class ImportExportViewModel @Inject constructor(
             progress(0.8f, "知行同步：拉取云端短信…")
             val smsImported = importRemoteSms()
             progress(0.95f, "知行同步：完成汇总…")
+            val localCount = repo.countOnce()
             _status.value = IOStatus(
-                message = "知行同步完成",
-                syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，跟进记录 $followupsImported 条，短信 $smsImported 条，备份：$backup"
+                message = if (imported == 0 && localCount > 0) "知行同步完成（线上无数据）" else "知行同步完成",
+                syncSummary = "导入 $imported 位联系人 / 覆盖 $overridden / 冲突保留 $conflicts / 跳过 $skipped，跟进记录 $followupsImported 条，短信 $smsImported 条，备份：$backup" +
+                    (if (imported == 0 && localCount > 0) "\n线上暂无数据：若要把本地数据上传到线上，请在「数据」页点「备份并导出」" else "")
             )
         }
     }
@@ -1004,13 +1009,16 @@ class ImportExportViewModel @Inject constructor(
                 }
             }
             progress(0.92f, "知行同步：完成汇总…")
+            val hasFail = failed > 0 || fuFailed > 0 || failedTags > 0
             _status.value = IOStatus(
-                message = "知行同步完成",
+                message = if (hasFail) "知行同步完成（${failed + fuFailed + failedTags} 条失败，详见明细）" else "知行同步完成",
+                isError = hasFail,
                 syncSummary = listOfNotNull(
                     batchWarn.takeIf { it.isNotEmpty() },
                     "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone）",
                     "跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}",
-                    "备份：$backup"
+                    "备份：$backup",
+                    if (hasFail) "失败原因多为：服务器地址不正确（应以 /api 结尾）或线上接口未开放；请检查「数据」页服务器地址后重试" else null
                 ).joinToString("\n")
             )
         }

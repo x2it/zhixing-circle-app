@@ -24,8 +24,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.realtor.geeksales.data.db.FollowUp
@@ -59,12 +62,21 @@ fun CustomerDetailScreen(
     vm: CustomerDetailViewModel = hiltViewModel()
 ) {
     val c by vm.customer.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
     val list by vm.followUps.collectAsStateWithLifecycle()
     val smsList by vm.smsMessages.collectAsStateWithLifecycle()
     val callList by vm.callRecords.collectAsStateWithLifecycle()
     val extFields by vm.extFields.collectAsStateWithLifecycle()
     val schema by vm.schema.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
+
+    // 「直接拨打」需要 CALL_PHONE 权限：未授权时先请求，拒绝后引导去系统设置
+    val callPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) vm.dial(true)
+        else com.realtor.geeksales.ui.components.GlobalToast.showError("未授予「拨打电话」权限：请在 系统设置 → 应用 → TMA → 权限 → 拨打电话 中开启（仅影响「直接拨打」，普通拨号不受影响）")
+    }
     androidx.compose.runtime.LaunchedEffect(id) { vm.setCustomerId(id) }
     // 超时降级：3 秒仍未加载出客户，显示明确错误态而非无限转圈（历史"看似假死"来源之一）
     var loadTimeout by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -169,7 +181,16 @@ fun CustomerDetailScreen(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         GeekPrimaryButton("拨号", { vm.dial(false) }, Modifier.weight(1f))
-                        GeekGhostButton("直接拨打", color = Danger, onClick = { vm.dial(true) })
+                        GeekGhostButton("直接拨打", color = Danger, onClick = {
+                            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                    ctx, android.Manifest.permission.CALL_PHONE
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                vm.dial(true)
+                            } else {
+                                callPermLauncher.launch(android.Manifest.permission.CALL_PHONE)
+                            }
+                        })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         GeekPrimaryButton("登记跟进", { openFollowUp(customer.id) }, Modifier.weight(1f))

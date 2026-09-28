@@ -68,6 +68,7 @@ fun ImportExportScreen(
         val m = status.message
         if (m.isNotEmpty() && m != lastNotified) {
             when {
+                !status.running && status.isError -> { GlobalToast.showError(m); lastNotified = m }
                 !status.running && m.contains("完成") -> { GlobalToast.showSuccess(m); lastNotified = m }
                 !status.running && m.startsWith("失败") -> { GlobalToast.showError(m); lastNotified = m }
             }
@@ -205,6 +206,14 @@ fun ImportExportScreen(
                         if (busy || baseUrlInput.isBlank()) return@GeekGhostButton
                         vm.setBaseUrl(baseUrlInput)
                         GlobalToast.showSuccess("服务器地址已更新")
+                    })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("地址应为 域名 + /api（如 https://people.app.workbuddy.host/api）；保存时自动补 /api 并清理多余字符", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    GeekGhostButton("恢复默认", color = if (busy) TextMuted else Warning, onClick = {
+                        if (busy) return@GeekGhostButton
+                        vm.resetBaseUrl()
+                        GlobalToast.showSuccess("已恢复默认地址 ${com.realtor.geeksales.data.remote.WorkbuddyApi.DEFAULT_BASE_URL}")
                     })
                 }
                 Spacer(Modifier.height(4.dp))
@@ -434,6 +443,7 @@ fun ImportExportScreen(
             SectionCard("执行状态", null) {
                 val c = when {
                     status.running -> Warning
+                    status.isError -> Danger
                     status.message.startsWith("失败") -> Danger
                     else -> Success
                 }

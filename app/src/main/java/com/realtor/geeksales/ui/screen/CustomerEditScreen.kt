@@ -173,7 +173,7 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
             val labels = mapOf(
                 IntentLevel.S to "S 成交高价值", IntentLevel.A to "A 高意向", IntentLevel.B to "B 已接触",
                 IntentLevel.C to "C 信息完整", IntentLevel.D to "D 线索", IntentLevel.V to "V 已成交",
-                IntentLevel.U to "U 未分类"
+                IntentLevel.U to "/ 未分类"
             )
             val levels = listOf(IntentLevel.S, IntentLevel.A, IntentLevel.B, IntentLevel.C, IntentLevel.D, IntentLevel.V, IntentLevel.U)
             // 两行展示：主层级（S-A-B-C）+ 收尾（D-V-U）

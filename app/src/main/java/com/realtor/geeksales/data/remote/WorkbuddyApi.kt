@@ -200,9 +200,23 @@ class WorkbuddyApi @Inject constructor(
         prefs.getString(KEY_BASE_URL, null)?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
             ?: DEFAULT_BASE_URL
 
-    /** 修改 API 基础地址（平台迁移时使用） */
+    /**
+     * 修改 API 基础地址（平台迁移时使用）。
+     * 保存时自动清洗：去首尾空白、去尾部 ;/空格等脏字符；若路径不含 /api 自动补上
+     * （线上固定 /api 前缀，用户通常只换域名；补 /api 可避免"提示成功但线上无数据"）。
+     */
     fun setBaseUrl(url: String) {
-        prefs.edit().putString(KEY_BASE_URL, url.trim().trimEnd('/')).apply()
+        var cleaned = url.trim().trimEnd('/', ';', ' ', '，', '；')
+        // 只保留协议+域名部分再拼 /api，防止粘入多余路径或参数
+        val m = Regex("^(https?://[^/?#]+)").find(cleaned)
+        val host = m?.groupValues?.get(1) ?: cleaned
+        cleaned = host + if (host.endsWith("/api")) "" else "/api"
+        prefs.edit().putString(KEY_BASE_URL, cleaned).apply()
+    }
+
+    /** 恢复默认地址（知行朋友圈官方网关） */
+    fun resetBaseUrl() {
+        prefs.edit().remove(KEY_BASE_URL).apply()
     }
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -236,7 +250,7 @@ class WorkbuddyApi @Inject constructor(
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
         runCatching { json.decodeFromString<WbContactPage>(body) }
             .map { WbResult.Success(it) as WbResult<WbContactPage> }
-            .getOrElse { WbResult.Error("响应解析失败：${it.message}") }
+            .getOrElse { WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
     }
 
     /** 拉取全部标签（name→id 映射用于导出打标） */
@@ -305,7 +319,7 @@ class WorkbuddyApi @Inject constructor(
             val body = get("/followups?page=$page&pageSize=$PAGE_SIZE")
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             val r = runCatching { json.decodeFromString<WbFollowupPage>(body) }
-                .getOrElse { return@withContext WbResult.Error("响应解析失败：${it.message}") }
+                .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
@@ -330,7 +344,7 @@ class WorkbuddyApi @Inject constructor(
             val body = get("/messages?page=$page&pageSize=$PAGE_SIZE")
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key（线上 /api/messages 接口需已开放）")
             val r = runCatching { json.decodeFromString<WbMessagePage>(body) }
-                .getOrElse { return@withContext WbResult.Error("响应解析失败：${it.message}") }
+                .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
@@ -362,7 +376,7 @@ class WorkbuddyApi @Inject constructor(
             val el = json.parseToJsonElement(body)
             (el as? JsonObject)?.get("smsSyncEnabled")?.jsonPrimitive?.content?.toBooleanStrictOrNull()
         }.getOrNull()
-        if (v == null) WbResult.Error("响应解析失败：$body")
+        if (v == null) WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：$body")
         else WbResult.Success(v)
     }
 
@@ -383,7 +397,7 @@ class WorkbuddyApi @Inject constructor(
             val el = json.parseToJsonElement(body)
             (el as? JsonObject)?.get("callSyncEnabled")?.jsonPrimitive?.content?.toBooleanStrictOrNull()
         }.getOrNull()
-        if (v == null) WbResult.Error("响应解析失败：$body")
+        if (v == null) WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：$body")
         else WbResult.Success(v)
     }
 
@@ -402,7 +416,7 @@ class WorkbuddyApi @Inject constructor(
             val body = get("/calls?page=$page&pageSize=$PAGE_SIZE")
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             val r = runCatching { json.decodeFromString<WbCallPage>(body) }
-                .getOrElse { return@withContext WbResult.Error("响应解析失败：${it.message}") }
+                .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
@@ -428,7 +442,7 @@ class WorkbuddyApi @Inject constructor(
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             runCatching { json.decodeFromString<WbBatchResponse>(resp) }
                 .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
-                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+                .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
 
     /** 删除一条线上通话记录（DELETE /api/calls/:id） */
@@ -528,7 +542,7 @@ class WorkbuddyApi @Inject constructor(
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             runCatching { json.decodeFromString<WbBatchResponse>(resp) }
                 .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
-                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+                .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
 
     /** 批量上传跟进记录（POST /api/followups/batch），≤100 条/批；带批次信息 */
@@ -549,7 +563,7 @@ class WorkbuddyApi @Inject constructor(
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             runCatching { json.decodeFromString<WbBatchResponse>(resp) }
                 .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
-                .getOrElse { WbResult.Error("批量响应解析失败：${it.message}") }
+                .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
 
     /**
@@ -651,7 +665,8 @@ class WorkbuddyApi @Inject constructor(
         return runCatching {
             client.newCall(b).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    resp.body?.string()?.takeIf { it.isNotBlank() } ?: "HTTP ${resp.code}"
+                    // 非 2xx：前缀标记状态码，is2xx 据此可靠识别失败
+                    "HTTP ${resp.code}:${resp.body?.string().orEmpty().take(160)}"
                 } else {
                     resp.body?.string()
                 }
@@ -664,11 +679,22 @@ class WorkbuddyApi @Inject constructor(
         body.contains("未登录") || body.contains("会话已过期") ||
             body.contains("UNAUTHORIZED") || body.startsWith("HTTP 401")
 
-    private fun is2xx(body: String): Boolean = runCatching {
-        val el = json.parseToJsonElement(body)
-        val code = (el as? JsonObject)?.get("code")?.jsonPrimitive?.content?.toIntOrNull()
-        code == null || code in 200..299
-    }.getOrDefault(true)
+    /**
+     * 判断响应是否真的是成功 JSON：
+     * - 非 2xx（"HTTP <code>:" 前缀）→ 失败
+     * - 非 JSON（HTML 页面等，常见于服务器地址填错打到网页首页）→ 失败
+     * - JSON 且 code 为空或 2xx → 成功
+     */
+    private fun is2xx(body: String): Boolean {
+        if (body.startsWith("HTTP ")) return false
+        return runCatching {
+            val el = json.parseToJsonElement(body)
+            if (el is JsonObject) {
+                val code = el.get("code")?.jsonPrimitive?.content?.toIntOrNull()
+                code == null || code in 200..299
+            } else true
+        }.getOrDefault(false)
+    }
 
     private fun extractError(body: String): String {
         val msg = runCatching {

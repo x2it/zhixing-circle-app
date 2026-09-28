@@ -165,6 +165,9 @@ interface CustomerDao {
     @Query("SELECT COUNT(*) FROM customers")
     suspend fun countAll(): Int
 
+    @Query("SELECT COUNT(*) FROM customers")
+    suspend fun countOnce(): Int
+
     @Query("DELETE FROM customers")
     suspend fun deleteAll()
 

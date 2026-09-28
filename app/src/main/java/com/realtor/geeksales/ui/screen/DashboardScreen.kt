@@ -120,7 +120,7 @@ fun DashboardScreen(
                     IntentRow("C", intentMap["C"] ?: 0, IntentC, maxCount)
                     IntentRow("D", intentMap["D"] ?: 0, IntentD, maxCount)
                     IntentRow("V", intentMap["V"] ?: 0, IntentV, maxCount)
-                    IntentRow("U", intentMap["U"] ?: 0, IntentU, maxCount)
+                    IntentRow("/", intentMap["U"] ?: 0, IntentU, maxCount)
                 }
             }
 

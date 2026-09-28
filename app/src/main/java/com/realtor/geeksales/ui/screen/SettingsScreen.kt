@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -46,6 +47,17 @@ fun SettingsScreen(
 ) {
     val ctx = LocalContext.current
     var checks by remember { mutableStateOf(runPermChecks(ctx)) }
+    // 每次回到前台（含从系统设置授权返回）都重新检查，避免"开了权限还显示未授权"
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                checks = runPermChecks(ctx)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     Column(Modifier.fillMaxSize().background(Bg)) {
         GeekTopBar(title = "设置", onBack = onBack)
         Column(
@@ -60,12 +72,13 @@ fun SettingsScreen(
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("权限状态", color = Accent, style = MaterialTheme.typography.labelMedium)
+                    Text("未授权的权限会直接影响对应功能；从系统设置返回本页会自动刷新状态。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(4.dp))
-                    Row { Text("电话拨打权限", color = TextMuted, modifier = Modifier.width(180.dp)); Mark(checks.callPhone) }
-                    Row { Text("电话状态权限", color = TextMuted, modifier = Modifier.width(180.dp)); Mark(checks.readPhone) }
-                    Row { Text("通话记录权限", color = TextMuted, modifier = Modifier.width(180.dp)); Mark(checks.readCallLog) }
-                    Row { Text("通讯录读写权限", color = TextMuted, modifier = Modifier.width(180.dp)); Mark(checks.readContacts) }
-                    Row { Text("通知推送权限", color = TextMuted, modifier = Modifier.width(180.dp)); Mark(checks.postNotify) }
+                    PermRow("电话拨打权限", checks.callPhone, "用于详情页「直接拨打」；未开启时点「直接拨打」无反应")
+                    PermRow("电话状态权限", checks.readPhone, "用于通话结束自动弹出跟进登记卡片")
+                    PermRow("通话记录权限", checks.readCallLog, "用于读取本机通话记录做备份与互动档案")
+                    PermRow("通讯录读写权限", checks.readContacts, "用于导入/导出系统通讯录与标签分组")
+                    PermRow("通知推送权限", checks.postNotify, "用于跟进日期到点提醒")
                     Spacer(Modifier.height(8.dp))
                     GeekGhostButton("跳转系统权限设置", color = Accent, onClick = onOpenPermSettings)
                 }
@@ -117,6 +130,20 @@ private fun runPermChecks(ctx: Context): PChecks = PChecks(
     readContacts = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED,
     postNotify = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED else true
 )
+
+@Composable
+private fun PermRow(name: String, ok: Boolean, hint: String) {
+    val c = if (ok) Success else Danger
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(name, color = TextMuted, modifier = Modifier.weight(1f))
+            Text(if (ok) "已授权" else "未授权", color = c, style = MaterialTheme.typography.labelMedium)
+        }
+        if (!ok) {
+            Text("未授权：$hint", color = c, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
 
 @Composable
 private fun Mark(ok: Boolean) {
