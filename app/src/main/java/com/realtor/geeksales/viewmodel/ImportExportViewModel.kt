@@ -942,21 +942,31 @@ class ImportExportViewModel @Inject constructor(
             createChunks.forEachIndexed { ci, chunk ->
                 progress(
                     0.2f + 0.48f * ci / createChunks.size.coerceAtLeast(1),
-                    "知行同步：上传联系人 ${(ci * 100 + chunk.size).coerceAtMost(toCreate.size)}/${toCreate.size}…"
+                    "知行同步：上传联系人 ${(ci * 500 + chunk.size).coerceAtMost(toCreate.size)}/${toCreate.size}…"
                 )
-                when (val r = wbApi.createContactsBatch(chunk.map { it.second }, batchMeta())) {
-                    is WbResult.Success -> {
-                        r.data.items.forEachIndexed { i, item ->
-                            val local = chunk.getOrNull(i)?.first ?: return@forEachIndexed
+                suspend fun applyCreated(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<Pair<Customer, com.realtor.geeksales.data.remote.WbContact>>) {
+                    if (rr is WbResult.Success) {
+                        rr.data.items.forEachIndexed { i, item ->
+                            val local = ch.getOrNull(i)?.first ?: return@forEachIndexed
                             if (item.id.isNotBlank()) {
                                 created++
                                 if (local.wbContactId != item.id) repo.updateWbContactId(local.id, item.id)
                             }
                         }
-                        failed += r.data.errors.count { it.index in chunk.indices }
+                        failed += rr.data.errors.count { it.index in ch.indices }
                     }
-                    is WbResult.Error -> { failed += chunk.size }
                 }
+                var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createContactsBatch(chunk.map { it.second }, batchMeta()) }
+                if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                    chunk.chunked(100).forEach { c100 ->
+                        applyCreated(withBackoff { wbApi.createContactsBatch(c100.map { it.second }, batchMeta()) }, c100)
+                        kotlinx.coroutines.yield()
+                    }
+                } else {
+                    applyCreated(r, chunk)
+                }
+                kotlinx.coroutines.yield()
+                kotlinx.coroutines.delay(250)
             }
             // 更新已有联系人（单条 PUT，线上无批量更新接口）
             progress(0.7f, "知行同步：更新已有联系人 ${toUpdate.size} 条…")
@@ -1000,18 +1010,30 @@ class ImportExportViewModel @Inject constructor(
                     )
                 )
             }
-            fuToPush.chunked(100).forEachIndexed { fi, chunk ->
+            fuToPush.chunked(500).forEachIndexed { fi, chunk ->
                 progress(
-                    0.72f + 0.16f * fi / fuToPush.chunked(100).size.coerceAtLeast(1),
-                    "知行同步：推送跟进记录 ${(fi * 100 + chunk.size).coerceAtMost(fuToPush.size)}/${fuToPush.size}…"
+                    0.72f + 0.16f * fi / fuToPush.chunked(500).size.coerceAtLeast(1),
+                    "知行同步：推送跟进记录 ${(fi * 500 + chunk.size).coerceAtMost(fuToPush.size)}/${fuToPush.size}…"
                 )
-                when (val r = wbApi.createFollowupsBatch(chunk, batchMeta())) {
-                    is WbResult.Success -> {
-                        pushed += chunk.size - r.data.errors.count { it.index in chunk.indices }
-                        fuFailed += r.data.errors.count { it.index in chunk.indices }
+                suspend fun applyFu(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<com.realtor.geeksales.data.remote.WbFollowup>) {
+                    if (rr is WbResult.Success) {
+                        pushed += ch.size - rr.data.errors.count { it.index in ch.indices }
+                        fuFailed += rr.data.errors.count { it.index in ch.indices }
+                    } else {
+                        fuFailed += ch.size
                     }
-                    is WbResult.Error -> fuFailed += chunk.size
                 }
+                var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createFollowupsBatch(chunk, batchMeta()) }
+                if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                    chunk.chunked(100).forEach { c100 ->
+                        applyFu(withBackoff { wbApi.createFollowupsBatch(c100, batchMeta()) }, c100)
+                        kotlinx.coroutines.yield()
+                    }
+                } else {
+                    applyFu(r, chunk)
+                }
+                kotlinx.coroutines.yield()
+                kotlinx.coroutines.delay(250)
             }
             progress(0.92f, "知行同步：完成汇总…")
             val hasFail = failed > 0 || fuFailed > 0 || failedTags > 0
@@ -1170,12 +1192,14 @@ class ImportExportViewModel @Inject constructor(
             val sdfMin = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
             val smsUri = android.net.Uri.parse("content://sms")
             val projection = arrayOf("_id", "address", "body", "date", "type")
-            // 全量对账模式：不再依赖游标（游标曾因失败被推过头导致“永远没有新短信”），
-            // 每次全量扫描 + 按远端 key 去重，缺失短信总能补推
-            val selection: String? = null
-            val args: Array<String>? = null
+            // 增量 + 全量兜底：date 游标只在“整批成功”时推进；失败批下次仍在游标之后，必被重扫补推
+            // （不会出现 v2.x 时代“失败一次后永远没有新短信”；首次/无游标 = 全量对账，补齐历史缺失）
+            val since = prefs.getLong("sms_sync_upto_date", 0L)
+            val selection = if (since > 0) "date > ?" else null
+            val args = if (since > 0) arrayOf(since.toString()) else null
             var pushed = 0
             var failed = 0
+            var lastErrCode: Int? = null
             val toPush = mutableListOf<Pair<Long, WbMessage>>()
             runCatching {
                 ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
@@ -1215,24 +1239,50 @@ class ImportExportViewModel @Inject constructor(
                 )
                 return@withContext
             }
-            // 批量推送（≤100/批，线上按批次归档可时光机回溯）
-            // 全量对账天然可重试：失败的批次下次同步仍会被扫描到并补推，无游标、无静默丢失
+            // 批量推送：500/批（Web 端实测不再限流）+ 429/5xx 指数退避重试 + 400 降级 100（契约兼容）
+            // 服务端按 号码+时间+内容 幂等去重，重试不会产生重复数据
             if (toPush.isNotEmpty()) {
-                val chunks = toPush.chunked(100)
+                var maxOkDate = since
+                val chunks = toPush.chunked(500)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
                         0.1f + 0.8f * ci / chunks.size.coerceAtLeast(1),
-                        "短信同步：上传 ${(ci * 100 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
+                        "短信同步：上传 ${(ci * 500 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
                     )
-                    when (val r = wbApi.createMessagesBatch(chunk.map { it.second }, batchMeta())) {
-                        is WbResult.Success -> {
-                            pushed += r.data.items.count { it.id.isNotBlank() }
-                            failed += r.data.errors.size
+                    var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createMessagesBatch(chunk.map { it.second }, batchMeta()) }
+                    if (r is WbResult.Error) {
+                        val code = r.message.substringBefore(':').trim().toIntOrNull()
+                        lastErrCode = code ?: lastErrCode
+                        // 500 批被服务端上限拒绝（HTTP 400/413/415）→ 自动拆 100 重发，保证兼容
+                        if (code in listOf(400, 413, 415) && chunk.size > 100) {
+                            chunk.chunked(100).forEach { c100 ->
+                                when (val r2 = withBackoff { wbApi.createMessagesBatch(c100.map { it.second }, batchMeta()) }) {
+                                    is WbResult.Success -> {
+                                        pushed += r2.data.items.count { it.id.isNotBlank() }
+                                        failed += r2.data.errors.size
+                                        if (r2.data.errors.isEmpty()) maxOkDate = maxOf(maxOkDate, c100.maxOf { it.first })
+                                    }
+                                    is WbResult.Error -> {
+                                        val c2 = r2.message.substringBefore(':').trim().toIntOrNull()
+                                        if (c2 != null) lastErrCode = c2
+                                        failed += c100.size
+                                    }
+                                }
+                                kotlinx.coroutines.yield()
+                            }
+                        } else {
+                            failed += chunk.size
                         }
-                        is WbResult.Error -> failed += chunk.size
+                    } else if (r is WbResult.Success) {
+                        pushed += r.data.items.count { it.id.isNotBlank() }
+                        failed += r.data.errors.size
+                        // 整批成功才推进游标（失败批下次仍在游标之后，必被重扫补推）
+                        if (r.data.errors.isEmpty()) maxOkDate = maxOf(maxOkDate, chunk.maxOf { it.first })
                     }
-                    kotlinx.coroutines.yield()
+                    // 批间 250ms，降低瞬时并发（Web 端建议）
+                    kotlinx.coroutines.delay(250)
                 }
+                if (maxOkDate > since) prefs.edit().putLong("sms_sync_upto_date", maxOkDate).apply()
             }
             // 0 条也要说清楚：区分"已全部同步过"与"权限/数据问题"，绝不假成功
             val msg = if (pushed == 0 && failed == 0) {
@@ -1240,10 +1290,19 @@ class ImportExportViewModel @Inject constructor(
             } else {
                 "短信云端同步完成：推送 $pushed 条（失败 $failed）"
             }
+            val errHint = when (lastErrCode) {
+                401 -> "API Key 无效或已失效：请到数据页检查密钥"
+                403 -> "云端同步开关未开启：请先开启短信同步开关再试"
+                429 -> "线上限流：已自动重试，稍后再试"
+                in 400..499 -> "请求被云端拒绝（HTTP $lastErrCode）：多为字段格式问题，已保留本地数据"
+                else -> null
+            }
             _status.value = IOStatus(
                 message = msg,
                 isError = failed > 0,
-                syncSummary = if (failed > 0) "失败 ${failed} 条（多为线上限流），本地数据未受影响；稍后重试即可" else "云端已按批次归档，可时光机回溯"
+                syncSummary = if (failed > 0) {
+                    "失败 ${failed} 条；${errHint ?: "本地数据未受影响，稍后重试即可"}"
+                } else "云端已按批次归档，可时光机回溯"
             )
         }
     }
@@ -1379,12 +1438,27 @@ class ImportExportViewModel @Inject constructor(
             var pushed = 0
             var pushFailed = 0
             if (toPush.isNotEmpty()) {
-                val chunks = toPush.chunked(100)
+                val chunks = toPush.chunked(500)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
                         0.12f + 0.4f * ci / chunks.size.coerceAtLeast(1),
-                        "通话记录：上传 ${(ci * 100 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
+                        "通话记录：上传 ${(ci * 500 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
                     )
+                    suspend fun applyCalls(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<com.realtor.geeksales.data.db.CallRecord>) {
+                        if (rr is WbResult.Success) {
+                            // 响应 items 与请求顺序一致，回填线上 id
+                            rr.data.items.forEachIndexed { i, item ->
+                                val local = ch.getOrNull(i) ?: return@forEachIndexed
+                                if (item.id.isNotBlank()) {
+                                    pushed++
+                                    if (local.wbCallId != item.id) repo.updateWbCallId(local.id, item.id)
+                                }
+                            }
+                            pushFailed += rr.data.errors.count { it.index in ch.indices }
+                        } else {
+                            pushFailed += ch.size
+                        }
+                    }
                     val wbCalls = chunk.map { c ->
                         com.realtor.geeksales.data.remote.WbCall(
                             phone = c.phone,
@@ -1394,20 +1468,26 @@ class ImportExportViewModel @Inject constructor(
                             note = c.note
                         )
                     }
-                    when (val r = wbApi.createCallsBatch(wbCalls, batchMeta())) {
-                        is WbResult.Success -> {
-                            // 响应 items 与请求顺序一致，回填线上 id
-                            r.data.items.forEachIndexed { i, item ->
-                                val local = chunk.getOrNull(i) ?: return@forEachIndexed
-                                if (item.id.isNotBlank()) {
-                                    pushed++
-                                    if (local.wbCallId != item.id) repo.updateWbCallId(local.id, item.id)
-                                }
+                    var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createCallsBatch(wbCalls, batchMeta()) }
+                    if (r is WbResult.Error && (r.message.substringBefore(':').trim().toIntOrNull() in listOf(400, 413, 415)) && chunk.size > 100) {
+                        chunk.chunked(100).forEach { c100 ->
+                            val wbC100 = c100.map { c ->
+                                com.realtor.geeksales.data.remote.WbCall(
+                                    phone = c.phone,
+                                    direction = c.direction,
+                                    duration = c.duration,
+                                    callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
+                                    note = c.note
+                                )
                             }
-                            pushFailed += r.data.errors.count { it.index in chunk.indices }
+                            applyCalls(withBackoff { wbApi.createCallsBatch(wbC100, batchMeta()) }, c100)
+                            kotlinx.coroutines.yield()
                         }
-                        is WbResult.Error -> pushFailed += chunk.size
+                    } else {
+                        applyCalls(r, chunk)
                     }
+                    kotlinx.coroutines.yield()
+                    kotlinx.coroutines.delay(250)
                 }
             }
             // 4) 拉取云端通话去重入库（互动档案完整性）
@@ -1688,17 +1768,43 @@ class ImportExportViewModel @Inject constructor(
         if (runningJob?.isActive == true) return
         _status.value = IOStatus(running = true, message = progressMsg)
         runningJob = viewModelScope.launch {
-            runCatching { block() }
-                .onFailure { t ->
-                    // 异常路径必须标 isError，UI 才按失败样式提示，不能误报成功
-                    _status.value = IOStatus(message = "失败：${t.message ?: t.javaClass.simpleName}", isError = true)
-                }
+            try {
+                block()
+            } catch (t: kotlinx.coroutines.CancellationException) {
+                // 用户主动取消：显示"已取消"并继续传播取消，不得误报失败
+                _status.value = IOStatus(message = "操作已取消（已完成部分已保留，未上传数据不会丢失）", isError = true)
+                throw t
+            } catch (t: Throwable) {
+                // 异常路径必须标 isError，UI 才按失败样式提示，不能误报成功
+                _status.value = IOStatus(message = "失败：${t.message ?: t.javaClass.simpleName}", isError = true)
+            }
         }
+    }
+
+    /** 取消进行中的同步/导入/导出：立即停止后续批次，已上传/已写入的保留 */
+    fun cancelRunning() {
+        runningJob?.cancel()
     }
 
     /** 上报确定性进度（0..1），UI 显示进度条 + 百分比 */
     private fun progress(p: Float, msg: String) {
         _status.value = IOStatus(running = true, message = msg, progress = p.coerceIn(0f, 1f))
+    }
+
+    /** 429 / 5xx 指数退避重试（1s→2s→4s，共 3 次）；4xx 不重试（重试无用） */
+    private suspend fun <T> withBackoff(send: suspend () -> WbResult<T>): WbResult<T> {
+        var r = send()
+        if (r is WbResult.Error) {
+            val code = r.message.substringBefore(':').trim().toIntOrNull()
+            if (code == 429 || (code ?: 0) >= 500) {
+                repeat(3) { attempt ->
+                    kotlinx.coroutines.delay(1000L shl attempt)
+                    r = send()
+                    if (r is WbResult.Success) return@repeat
+                }
+            }
+        }
+        return r
     }
 
     /** 云端「数据可追溯·批次」元信息：TMA同步 <日期时间> / source=tma / 设备与版本 */

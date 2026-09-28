@@ -187,6 +187,10 @@ fun ImportExportScreen(
                                     modifier = Modifier.align(Alignment.End)
                                 )
                             }
+                            // 可取消：上传/同步进行中随时可中断，已上传部分保留、未上传部分下次自动补推
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                                GeekGhostButton("取消", color = Danger, onClick = { vm.cancelRunning() })
+                            }
                         } else {
                             // 结束：成功/失败结果常驻（直到下一次操作）
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

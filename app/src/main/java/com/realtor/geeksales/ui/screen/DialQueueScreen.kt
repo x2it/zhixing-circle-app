@@ -105,11 +105,11 @@ fun DialQueueScreen(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GeekGhostButton("智能建队", color = Success, onClick = { showSmart = true })
+                GeekGhostButton("智能队列", color = Success, onClick = { showSmart = true })
                 GeekGhostButton("去客户列表", color = Accent, onClick = { onNav(Routes.CUSTOMER_LIST) })
                 GeekGhostButton("导入客户", color = Warning, onClick = { onNav(Routes.IMPORT_EXPORT) })
             }
-            // 智能建队：按分层/标签/跟进到期 批量入队（专业科学的批量匹配，不再逐个手动添加）
+            // 智能队列：按分层/标签/跟进到期 批量入队（专业科学的批量匹配，不再逐个手动添加）
             if (showSmart) {
                 val tierMeta = vm.templateMeta()
                 SmartQueueDialog(
@@ -167,7 +167,7 @@ private fun SmartQueueDialog(
     )
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("智能建队 · 批量入队") },
+        title = { Text("智能队列 · 批量入队") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("按分层", color = TextSecondary, style = MaterialTheme.typography.labelMedium)

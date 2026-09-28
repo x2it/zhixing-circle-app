@@ -12,7 +12,7 @@ enum class FollowResult {
     NOT_REACHED,    // 未接通/无人接
     WRONG_NUMBER,   // 错号/空号
     SHUTDOWN,       // 关机/停机
-    APPOINTMENT,    // 约定看房/线下面谈
+    APPOINTMENT,    // 约谈/线下面谈
     PENDING         // 待跟进（未置可否）
 }
 
