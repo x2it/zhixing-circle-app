@@ -172,6 +172,16 @@ class CustomerRepository @Inject constructor(
         customerDao.enqueueAllOrdered(ids)
     }
 
+    /** 批量设置分层（名单多选扁平操作） */
+    suspend fun setIntentLevels(ids: List<Long>, level: com.realtor.geeksales.data.db.IntentLevel) {
+        if (ids.isNotEmpty()) customerDao.updateIntentLevels(ids, level.name)
+    }
+
+    /** 批量打标签（覆盖该批客户的同一标签集合，不动其它标签） */
+    suspend fun addTagsToMany(ids: List<Long>, tags: List<String>) {
+        ids.forEach { id -> applyTags(id, tags) }
+    }
+
     suspend fun removeFromQueue(id: Long) {
         customerDao.setQueue(id, false, null)
         // 出队后重排，保持编号连续（1..N），与队列页位置编号一致

@@ -26,6 +26,11 @@ interface CustomerDao {
     @Update
     suspend fun update(customer: Customer)
 
+    /** 批量设置分层（名单多选扁平操作） */
+    @Query("UPDATE customers SET intentLevel = :level WHERE id IN (:ids)")
+    suspend fun updateIntentLevels(ids: List<Long>, level: String)
+
+
     @Query("DELETE FROM customers WHERE id = :id")
     suspend fun deleteById(id: Long)
 

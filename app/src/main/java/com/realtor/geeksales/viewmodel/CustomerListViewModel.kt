@@ -92,6 +92,18 @@ class CustomerListViewModel @Inject constructor(
 
     fun delete(id: Long) = viewModelScope.launch { repo.deleteById(id) }
 
+    /** 批量设置分层（名单多选扁平操作） */
+    fun batchSetLevel(ids: List<Long>, level: com.realtor.geeksales.data.db.IntentLevel) =
+        viewModelScope.launch { if (ids.isNotEmpty()) repo.setIntentLevels(ids, level) }
+
+    /** 批量打标签 */
+    fun batchAddTags(ids: List<Long>, tags: List<String>) =
+        viewModelScope.launch { if (ids.isNotEmpty()) repo.addTagsToMany(ids, tags) }
+
+    /** 批量加入拨号队列 */
+    fun batchAddToQueue(ids: List<Long>) =
+        viewModelScope.launch { if (ids.isNotEmpty()) repo.addToQueueBatch(ids) }
+
     fun addAllFilteredToQueue() = viewModelScope.launch {
         val list = customers.value.filter { !it.queued }
         if (list.isEmpty()) return@launch

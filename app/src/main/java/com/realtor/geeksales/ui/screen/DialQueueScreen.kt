@@ -1,6 +1,9 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.realtor.geeksales.ui.screen
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +13,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.realtor.geeksales.ui.components.GlobalToast
+import com.realtor.geeksales.ui.theme.TextMuted
+import com.realtor.geeksales.ui.theme.TextPrimary
+import com.realtor.geeksales.ui.theme.TextSecondary
+import com.realtor.geeksales.ui.theme.Warning
+
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -59,6 +75,7 @@ fun DialQueueScreen(
     vm: DialQueueViewModel = hiltViewModel()
 ) {
     val q by vm.queue.collectAsStateWithLifecycle()
+    var showSmart by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(Bg)) {
         GeekTopBar(title = "拨号队列", subtitle = "共 ${q.size} 人", onBack = onBack, actions = {
             if (q.isNotEmpty()) {
@@ -88,8 +105,30 @@ fun DialQueueScreen(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GeekGhostButton("智能建队", color = Success, onClick = { showSmart = true })
                 GeekGhostButton("去客户列表", color = Accent, onClick = { onNav(Routes.CUSTOMER_LIST) })
                 GeekGhostButton("导入客户", color = Warning, onClick = { onNav(Routes.IMPORT_EXPORT) })
+            }
+            // 智能建队：按分层/标签/跟进到期 批量入队（专业科学的批量匹配，不再逐个手动添加）
+            if (showSmart) {
+                val tierMeta = vm.templateMeta()
+                SmartQueueDialog(
+                    tiers = tierMeta.tiers,
+                    tierLabels = tierMeta,
+                    tags = (tierMeta.identityTags + tierMeta.attributeTags).distinct(),
+                    onDismiss = { showSmart = false },
+                    onConfirm = { lvl, tag, onlyOverdue, withinDays ->
+                        vm.addSmart(
+                            level = lvl,
+                            tag = tag,
+                            onlyOverdue = onlyOverdue,
+                            dueWithinDays = withinDays
+                        ) { added ->
+                            GlobalToast.showSuccess(if (added > 0) "已加入队列 $added 人" else "符合条件且未入队的客户为 0（已全部在队或不存在）")
+                        }
+                        showSmart = false
+                    }
+                )
             }
         }
         AsciiDivider()
@@ -108,6 +147,109 @@ fun DialQueueScreen(
             }
         }
     }
+}
+
+@Composable
+private fun SmartQueueDialog(
+    tiers: List<String>,
+    tierLabels: com.realtor.geeksales.data.schema.TemplateMeta,
+    tags: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (com.realtor.geeksales.data.db.IntentLevel?, String?, Boolean, Long) -> Unit
+) {
+    var selLevel by remember { mutableStateOf<com.realtor.geeksales.data.db.IntentLevel?>(null) }
+    var selTag by remember { mutableStateOf<String?>(null) }
+    var followScope by remember { mutableStateOf(0) } // 0=全部 1=仅过期 2=含近7天到期
+    val tierToEnum = mapOf(
+        "S" to com.realtor.geeksales.data.db.IntentLevel.S, "A" to com.realtor.geeksales.data.db.IntentLevel.A,
+        "B" to com.realtor.geeksales.data.db.IntentLevel.B, "C" to com.realtor.geeksales.data.db.IntentLevel.C,
+        "D" to com.realtor.geeksales.data.db.IntentLevel.D, "V" to com.realtor.geeksales.data.db.IntentLevel.V, "U" to com.realtor.geeksales.data.db.IntentLevel.U
+    )
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("智能建队 · 批量入队") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("按分层", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "全部",
+                        color = if (selLevel == null) Accent else TextSecondary,
+                        modifier = Modifier
+                            .background(if (selLevel == null) Accent.copy(alpha = 0.16f) else BgElev2)
+                            .border(1.dp, if (selLevel == null) Accent else Divider)
+                            .clickable { selLevel = null }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    tiers.forEach { t ->
+                        val en = tierToEnum[t]
+                        val lvlColor = if (en != null) com.realtor.geeksales.ui.components.intentColor(en) else Accent
+                        val on = selLevel == en
+                        Text(
+                            text = "${tierLabels.tierBadge(t)} ${tierLabels.tierLabels[t] ?: t}",
+                            color = if (on) lvlColor else TextSecondary,
+                            modifier = Modifier
+                                .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)
+                                .border(1.dp, if (on) lvlColor else Divider)
+                                .clickable { selLevel = if (on) null else en }
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Text("跟进时间", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("全部" to 0, "仅已过期" to 1, "含近7天到期" to 2).forEach { (name, v) ->
+                        val on = followScope == v
+                        Text(
+                            text = name,
+                            color = if (on) Warning else TextSecondary,
+                            modifier = Modifier
+                                .background(if (on) Warning.copy(alpha = 0.16f) else BgElev2)
+                                .border(1.dp, if (on) Warning else Divider)
+                                .clickable { followScope = v }
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+                if (tags.isNotEmpty()) {
+                    Text("按标签（可选）", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        tags.forEach { t ->
+                            val on = selTag == t
+                            Text(
+                                text = t,
+                                color = if (on) Accent else TextSecondary,
+                                modifier = Modifier
+                                    .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
+                                    .border(1.dp, if (on) Accent else Divider)
+                                    .clickable { selTag = if (on) null else t }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                Text("未入队者自动加入；已入队客户不会重复进队。", color = TextMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm(selLevel, selTag, followScope == 1, if (followScope == 2) 7L else 0L)
+            }) { Text("加入队列") }
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable

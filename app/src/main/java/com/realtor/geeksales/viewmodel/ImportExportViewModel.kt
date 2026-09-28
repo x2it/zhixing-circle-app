@@ -168,7 +168,10 @@ class ImportExportViewModel @Inject constructor(
                 )
             )) {
                 is WbResult.Success -> _status.value = IOStatus(message = "自定义字段「$label」已添加并同步到线上模板")
-                is WbResult.Error -> _status.value = IOStatus(message = "自定义字段「$label」已添加本地，推送线上失败：${r.message}")
+                is WbResult.Error -> _status.value = IOStatus(
+                    message = "自定义字段「$label」已添加本地（详情/编辑页可用）；线上字段接口暂未开放，推送失败：${r.message}",
+                    isError = true
+                )
             }
         }
     }
@@ -1147,8 +1150,6 @@ class ImportExportViewModel @Inject constructor(
                     }
                 }
             }
-            val prefs = ctx.getSharedPreferences("tma_prefs", Context.MODE_PRIVATE)
-            val cursor = prefs.getLong("sms_sync_last_id", 0L)
             // 远端消息 key 集合（phone|body|messageDate），避免重复推送
             val remoteKeys = HashSet<String>()
             when (val r = wbApi.fetchAllMessages()) {
@@ -1169,11 +1170,12 @@ class ImportExportViewModel @Inject constructor(
             val sdfMin = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
             val smsUri = android.net.Uri.parse("content://sms")
             val projection = arrayOf("_id", "address", "body", "date", "type")
-            val selection = if (cursor > 0) "_id > ?" else null
-            val args = if (selection != null) arrayOf(cursor.toString()) else null
+            // 全量对账模式：不再依赖游标（游标曾因失败被推过头导致“永远没有新短信”），
+            // 每次全量扫描 + 按远端 key 去重，缺失短信总能补推
+            val selection: String? = null
+            val args: Array<String>? = null
             var pushed = 0
             var failed = 0
-            var maxId = cursor
             val toPush = mutableListOf<Pair<Long, WbMessage>>()
             runCatching {
                 ctx.contentResolver.query(smsUri, projection, selection, args, "_id ASC")?.use { c ->
@@ -1188,7 +1190,6 @@ class ImportExportViewModel @Inject constructor(
                         val body = c.getString(bodyI).orEmpty()
                         val dateMs = c.getLong(dateI)
                         val type = c.getInt(typeI)
-                        maxId = maxOf(maxId, id)
                         if (phone.isBlank() || body.isBlank()) continue
                         val dateLabel = runCatching { sdfMin.format(Date(dateMs)) }.getOrNull()
                         if (dateLabel == null) continue
@@ -1215,11 +1216,8 @@ class ImportExportViewModel @Inject constructor(
                 return@withContext
             }
             // 批量推送（≤100/批，线上按批次归档可时光机回溯）
-            // 关键：游标只按“整批成功”推进；任一整批失败则失败部分永远留在游标之后，下次重试，
-            // 避免“失败一次后永远提示没有新短信”的数据静默丢失
+            // 全量对账天然可重试：失败的批次下次同步仍会被扫描到并补推，无游标、无静默丢失
             if (toPush.isNotEmpty()) {
-                var lastOkId = cursor
-                var anyOk = false
                 val chunks = toPush.chunked(100)
                 chunks.forEachIndexed { ci, chunk ->
                     progress(
@@ -1230,16 +1228,11 @@ class ImportExportViewModel @Inject constructor(
                         is WbResult.Success -> {
                             pushed += r.data.items.count { it.id.isNotBlank() }
                             failed += r.data.errors.size
-                            if (r.data.errors.isEmpty()) {
-                                lastOkId = maxOf(lastOkId, chunk.maxOf { it.first })
-                                anyOk = true
-                            }
                         }
                         is WbResult.Error -> failed += chunk.size
                     }
                     kotlinx.coroutines.yield()
                 }
-                if (anyOk) prefs.edit().putLong("sms_sync_last_id", lastOkId).apply()
             }
             // 0 条也要说清楚：区分"已全部同步过"与"权限/数据问题"，绝不假成功
             val msg = if (pushed == 0 && failed == 0) {

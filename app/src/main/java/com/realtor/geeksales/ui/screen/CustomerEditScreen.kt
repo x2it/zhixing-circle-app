@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.realtor.geeksales.ui.screen
 
@@ -19,8 +19,12 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DatePickerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -46,7 +51,10 @@ import com.realtor.geeksales.ui.theme.Bg
 import com.realtor.geeksales.ui.theme.BgElev2
 import com.realtor.geeksales.ui.theme.Danger
 import com.realtor.geeksales.ui.theme.Divider
+import com.realtor.geeksales.ui.theme.TextMuted
+import com.realtor.geeksales.ui.theme.TextPrimary
 import com.realtor.geeksales.ui.theme.TextSecondary
+import com.realtor.geeksales.ui.theme.Warning
 import com.realtor.geeksales.util.Formatter
 import com.realtor.geeksales.viewmodel.CustomerEditViewModel
 import com.realtor.geeksales.viewmodel.EditFormState
@@ -154,7 +162,7 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
             }
             GeekTextField(
                 form.tags, { vm.update { s -> s.copy(tags = it) } },
-                label = "${f.label} (逗号分隔，可自定义)", placeholder = "学区房, 地铁, 急售"
+                label = "${f.label} (逗号分隔，可自定义)", placeholder = "如：高意向, 自住, 复购"
             )
         }
         BuiltinKeys.EMAIL -> GeekTextField(form.email, { vm.update { s -> s.copy(email = it) } }, label = f.label, placeholder = "name@example.com")
@@ -166,8 +174,8 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
         BuiltinKeys.ADDRESS -> GeekTextField(form.address, { vm.update { s -> s.copy(address = it) } }, label = f.label, placeholder = "常用地址")
         BuiltinKeys.WEBSITE -> GeekTextField(form.website, { vm.update { s -> s.copy(website = it) } }, label = f.label, placeholder = "https://…")
         BuiltinKeys.AREA_PREF -> GeekTextField(form.areaPref, { vm.update { s -> s.copy(areaPref = it) } }, label = f.label, placeholder = "朝阳国贸 | 通州副中心")
-        BuiltinKeys.BUDGET_MIN -> GeekTextField(form.budgetMin, { vm.update { s -> s.copy(budgetMin = it) } }, label = "${f.label}(万)", placeholder = "400")
-        BuiltinKeys.BUDGET_MAX -> GeekTextField(form.budgetMax, { vm.update { s -> s.copy(budgetMax = it) } }, label = "${f.label}(万)", placeholder = "600")
+        BuiltinKeys.BUDGET_MIN -> GeekTextField(form.budgetMin, { vm.update { s -> s.copy(budgetMin = it) } }, label = f.label, placeholder = "400")
+        BuiltinKeys.BUDGET_MAX -> GeekTextField(form.budgetMax, { vm.update { s -> s.copy(budgetMax = it) } }, label = f.label, placeholder = "600")
         BuiltinKeys.HOUSE_TYPE -> GeekTextField(form.houseType, { vm.update { s -> s.copy(houseType = it) } }, label = f.label, placeholder = "三居/叠拼/平层")
         BuiltinKeys.TARGET_PROJECT -> GeekTextField(form.targetProject, { vm.update { s -> s.copy(targetProject = it) } }, label = f.label)
         BuiltinKeys.INTENT_LEVEL -> {
@@ -204,19 +212,75 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
             }
         }
         BuiltinKeys.NEXT_FOLLOW_AT -> {
-            var nextStr by remember {
-                mutableStateOf(if (form.nextFollowAt == null) "" else Formatter.day(form.nextFollowAt))
-            }
-            LaunchedEffect(form.nextFollowAt) {
-                nextStr = if (form.nextFollowAt == null) "" else Formatter.day(form.nextFollowAt)
-            }
-            GeekTextField(nextStr, { s ->
-                nextStr = s
-                val t = runCatching {
-                    java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).parse(s.trim())?.time
-                }.getOrNull()
+            // 日期选择器 + 快捷调整：不再手动填日期（反人性），一键/选择快速设定
+            var showDatePicker by remember { mutableStateOf(false) }
+            val nextAt = form.nextFollowAt
+            val nextLabel = if (nextAt == null) "未设置" else Formatter.day(nextAt)
+            val shortcuts = mapOf(
+                "今天" to 0L, "明天" to 1L, "一周后" to 7L, "两周后" to 14L, "一个月后" to 30L
+            )
+            val dayMs = 24L * 60 * 60 * 1000
+            val now = System.currentTimeMillis()
+            fun pickDays(days: Long) {
+                val t = java.util.Calendar.getInstance().apply {
+                    timeInMillis = now
+                    add(java.util.Calendar.DAY_OF_YEAR, days.toInt())
+                }.apply { set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis
                 vm.update { f -> f.copy(nextFollowAt = t) }
-            }, label = "${f.label} (yyyy-MM-dd)", placeholder = "2025-08-30")
+            }
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                shortcuts.forEach { (name, d) ->
+                    val on = nextAt != null && runCatching { java.util.Calendar.getInstance().apply { timeInMillis = nextAt!!; set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis == runCatching { java.util.Calendar.getInstance().apply { timeInMillis = now; add(java.util.Calendar.DAY_OF_YEAR, d.toInt()); set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis }.getOrNull() }.getOrDefault(false)
+                    Text(
+                        text = name,
+                        color = if (on) Accent else TextSecondary,
+                        modifier = Modifier
+                            .background(if (on) Accent.copy(alpha = 0.16f) else BgElev2)
+                            .border(1.dp, if (on) Accent else Divider)
+                            .clickable { pickDays(d) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (on) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("下次跟进", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Text(nextLabel, color = if (nextAt != null && nextAt < now) Warning else TextPrimary,
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                GeekGhostButton("选择日期", color = Accent, onClick = { showDatePicker = true })
+                if (nextAt != null) {
+                    GeekGhostButton("清除", color = TextMuted, onClick = { vm.update { f -> f.copy(nextFollowAt = null) } })
+                }
+            }
+            if (showDatePicker) {
+                val dpState = androidx.compose.material3.rememberDatePickerState(
+                    initialSelectedDateMillis = nextAt?.let { Formatter.dayToEpoch(Formatter.day(it)) } ?: now,
+                    initialDisplayedMonthMillis = nextAt ?: now
+                )
+                androidx.compose.material3.DatePickerDialog(
+                    onDismissRequest = { showDatePicker = false },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            dpState.selectedDateMillis?.let { ms ->
+                                vm.update { f -> f.copy(nextFollowAt = ms) }
+                            }
+                            showDatePicker = false
+                        }) { Text("确定") }
+                    },
+                    dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("取消") } }
+                ) {
+                    androidx.compose.material3.DatePicker(
+                        state = dpState,
+                        showModeToggle = false
+                    )
+                }
+            }
         }
         BuiltinKeys.NOTE -> GeekTextField(
             form.note, { vm.update { s -> s.copy(note = it) } },
