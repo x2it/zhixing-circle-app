@@ -77,6 +77,7 @@ fun SettingsScreen(
                     PermRow("电话拨打权限", checks.callPhone, "用于详情页「直接拨打」；未开启时点「直接拨打」无反应")
                     PermRow("电话状态权限", checks.readPhone, "用于通话结束自动弹出跟进登记卡片")
                     PermRow("通话记录权限", checks.readCallLog, "用于读取本机通话记录做备份与互动档案")
+                    PermRow("短信权限", checks.readSms, "用于短信本地备份与云端同步")
                     PermRow("通讯录读写权限", checks.readContacts, "用于导入/导出系统通讯录与标签分组")
                     PermRow("通知推送权限", checks.postNotify, "用于跟进日期到点提醒")
                     Spacer(Modifier.height(8.dp))
@@ -121,13 +122,14 @@ fun SettingsScreen(
     }
 }
 
-private data class PChecks(val callPhone: Boolean, val readPhone: Boolean, val readCallLog: Boolean, val readContacts: Boolean, val postNotify: Boolean)
+private data class PChecks(val callPhone: Boolean, val readPhone: Boolean, val readCallLog: Boolean, val readContacts: Boolean, val readSms: Boolean, val postNotify: Boolean)
 
 private fun runPermChecks(ctx: Context): PChecks = PChecks(
     callPhone = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.CALL_PHONE) == android.content.pm.PackageManager.PERMISSION_GRANTED,
     readPhone = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_PHONE_STATE) == android.content.pm.PackageManager.PERMISSION_GRANTED,
     readCallLog = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED,
     readContacts = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED,
+    readSms = androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.READ_SMS) == android.content.pm.PackageManager.PERMISSION_GRANTED,
     postNotify = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED else true
 )
 

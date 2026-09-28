@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -121,6 +122,7 @@ fun ImportExportScreen(
         }
     }
     // 短信动作标记（备份=1 / 同步云端=2），权限授权后执行对应动作
+    val ctx = LocalContext.current
     var smsAction by remember { mutableStateOf(0) }
     // 短信权限（备份 / 云端同步）
     val smsPermLauncher = rememberLauncherForActivityResult(
@@ -131,6 +133,8 @@ fun ImportExportScreen(
                 smsAction == 1 -> vm.backupSms()
                 smsAction == 2 -> vm.exportSmsToWorkbuddy()
             }
+        } else {
+            GlobalToast.showError("未授予「短信」权限：备份与云端同步无法执行。请在 系统设置 → 应用 → TMA → 权限 → 短信 中开启后重试")
         }
     }
     // 通话动作标记（同步云端=1 / 仅拉取=2），权限授权后执行（通话同步需要读本机通话记录）
@@ -143,6 +147,8 @@ fun ImportExportScreen(
                 callAction == 1 -> vm.syncCallsToWorkbuddy()
                 callAction == 2 -> vm.pullCallsFromWorkbuddy()
             }
+        } else {
+            GlobalToast.showError("未授予「通话记录」权限：云端备份与拉取无法执行。请在 系统设置 → 应用 → TMA → 权限 → 电话/通话记录 中开启后重试")
         }
     }
 
@@ -378,10 +384,15 @@ fun ImportExportScreen(
 
             // ================= 短信备份与同步 =================
             SectionCard("短信备份与同步", "本地增量备份 · 云端双向同步（需 READ_SMS 权限）") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val smsGranted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_SMS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     GeekPrimaryButton(if (busy) "处理中…" else "备份短信(CSV)", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else Success, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
                 }
+                Text(
+                    if (smsGranted) "短信权限：已授权" else "短信权限：未授权（点击上方按钮会请求授权；拒绝后需到系统设置开启）",
+                    color = if (smsGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
                     Spacer(Modifier.weight(1f))
@@ -391,6 +402,7 @@ fun ImportExportScreen(
 
             // ================= 通话记录备份与同步 =================
             SectionCard("通话记录备份与同步", "本机镜像 · 云端双向同步（需 READ_CALL_LOG 权限）") {
+                val callGranted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CALL_LOG) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekPrimaryButton(if (busy) "处理中…" else "备份+同步到云端", {
                         if (!busy) { callAction = 1; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
@@ -399,6 +411,10 @@ fun ImportExportScreen(
                         if (!busy) { callAction = 2; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
                     })
                 }
+                Text(
+                    if (callGranted) "通话记录权限：已授权" else "通话记录权限：未授权（点击上方按钮会请求授权；拒绝后需到系统设置开启）",
+                    color = if (callGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
+                )
                 Text("通话记录同步 = 云端通话备份：开启后本机通话（呼入/呼出/未接+时长）自动镜像并上传，客户详情「互动档案」可查看。云端开关默认关闭，首次同步会自动为你开启。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
@@ -492,12 +508,29 @@ fun ImportExportScreen(
                 GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) vm.clearAll() })
             }
 
-            // ================= 字段说明 =================
-            SectionCard("字段说明", null) {
-                Text(
-                    "列顺序(CSV/XLSX)：姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、预算下限(万)、预算上限(万)、房型、意向楼盘、意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)、邮箱、公司、职位、地址、昵称、网站、生日(YYYY-MM-DD)、即时消息。扩展列可选，第一行为表头(中文)。重复手机号自动去重。",
-                    color = TextPrimary, style = MaterialTheme.typography.bodyMedium
-                )
+            // ================= 字段说明（跟随当前行业模板，不写死） =================
+            SectionCard("字段说明", "列顺序跟随当前模板；换行业后拉取新模板即可更新") {
+                val fields = vm.currentSchema().sortedBy { it.order }
+                val baseNames = fields.filter { it.builtin }.map { it.label }
+                val extNames = fields.filter { !it.builtin }.map { it.label }
+                val tierMeta = vm.meta()
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "CSV/XLSX 内置列（当前模板）：${baseNames.joinToString("、")}",
+                        color = TextPrimary, style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (extNames.isNotEmpty()) {
+                        Text("扩展列（模板自定义）：${extNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(
+                        "分层选项：${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}（跟随模板）",
+                        color = TextMuted, style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "第一行为表头（中文）；手机号必填，重复自动去重；扩展列可选。",
+                        color = TextMuted, style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
             Spacer(Modifier.height(80.dp))
         }

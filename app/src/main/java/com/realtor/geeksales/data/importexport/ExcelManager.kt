@@ -27,9 +27,11 @@ class ExcelManager @Inject constructor(
     private val schemaStore: SchemaStore
 ) {
     companion object {
-        val HEADERS = CsvManager.HEADERS
         const val BUILTIN_COLS = CsvManager.BUILTIN_COLS
     }
+
+    /** 表头跟随模板分层（U 显示 /），导出时动态取 */
+    private val HEADERS: Array<String> get() = CsvManager.headers(schemaStore.meta().tiers)
 
     private fun extDefs(): List<FieldDef> = schemaStore.current().filter { !it.builtin }.sortedBy { it.order }
 

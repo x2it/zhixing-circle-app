@@ -169,22 +169,22 @@ private fun BuiltinField(f: FieldDef, form: EditFormState, vm: CustomerEditViewM
         BuiltinKeys.HOUSE_TYPE -> GeekTextField(form.houseType, { vm.update { s -> s.copy(houseType = it) } }, label = f.label, placeholder = "三居/叠拼/平层")
         BuiltinKeys.TARGET_PROJECT -> GeekTextField(form.targetProject, { vm.update { s -> s.copy(targetProject = it) } }, label = f.label)
         BuiltinKeys.INTENT_LEVEL -> {
-            // 六层语义（线上对齐）：S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交；U为纯本地状态
-            val labels = mapOf(
-                IntentLevel.S to "S 成交高价值", IntentLevel.A to "A 高意向", IntentLevel.B to "B 已接触",
-                IntentLevel.C to "C 信息完整", IntentLevel.D to "D 线索", IntentLevel.V to "V 已成交",
-                IntentLevel.U to "/ 未分类"
+            // 分层选项完全跟随模板（行业可换，不写死）：模板 tiers + tierLabels 动态渲染
+            val meta = vm.templateMeta.collectAsState().value
+            val tierToEnum = mapOf(
+                "S" to IntentLevel.S, "A" to IntentLevel.A, "B" to IntentLevel.B,
+                "C" to IntentLevel.C, "D" to IntentLevel.D, "V" to IntentLevel.V, "U" to IntentLevel.U
             )
-            val levels = listOf(IntentLevel.S, IntentLevel.A, IntentLevel.B, IntentLevel.C, IntentLevel.D, IntentLevel.V, IntentLevel.U)
-            // 两行展示：主层级（S-A-B-C）+ 收尾（D-V-U）
-            listOf(levels.take(4), levels.drop(4)).forEach { rowLevels ->
+            val levels = meta.tiers.mapNotNull { t -> tierToEnum[t] }
+            // 每行不超过 4 个，自动换行
+            listOf(levels.take(4), levels.drop(4)).filter { it.isNotEmpty() }.forEach { rowLevels ->
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     rowLevels.forEach { lvl ->
                         val on = form.intentLevel == lvl
                         val lvlColor = intentColor(lvl)
                         androidx.compose.runtime.key(lvl) {
                             Text(
-                                text = labels[lvl] ?: lvl.name,
+                                text = meta.tierLabel(lvl.name),
                                 color = if (on) lvlColor else TextSecondary,
                                 modifier = Modifier
                                     .background(if (on) lvlColor.copy(alpha = 0.16f) else BgElev2)

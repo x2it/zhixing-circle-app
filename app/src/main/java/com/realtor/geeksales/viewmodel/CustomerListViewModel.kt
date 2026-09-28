@@ -33,8 +33,11 @@ data class CustomerFilter(
 @HiltViewModel
 class CustomerListViewModel @Inject constructor(
     private val repo: CustomerRepository,
-    private val dialerHelper: DialerHelper
+    private val dialerHelper: DialerHelper,
+    private val schemaStore: com.realtor.geeksales.data.schema.SchemaStore
 ) : ViewModel() {
+    /** 模板分层（行业可换，驱动筛选 chips） */
+    val templateMeta = kotlinx.coroutines.flow.MutableStateFlow(schemaStore.meta())
 
     private val filter = MutableStateFlow(CustomerFilter())
     private val nowTick = MutableStateFlow(System.currentTimeMillis())

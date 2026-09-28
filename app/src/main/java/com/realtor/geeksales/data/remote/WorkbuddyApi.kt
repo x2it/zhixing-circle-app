@@ -46,7 +46,9 @@ data class WbSchemaBundle(
     val fields: List<WbRemoteField> = emptyList(),
     val tiers: List<String> = listOf("S", "A", "B", "C", "D", "V", "U"),
     val identityTags: List<String> = emptyList(),
-    val attributeTags: List<String> = emptyList()
+    val attributeTags: List<String> = emptyList(),
+    /** 分层中文语义（S→成交高价值…），模板可覆盖；空则 App 用默认语义 */
+    val tierLabels: Map<String, String> = emptyMap()
 )
 
 /** 批量接口响应（POST /contacts/batch、/followups/batch）：逐条独立处理，errors 含失败明细 */
@@ -491,12 +493,21 @@ class WorkbuddyApi @Inject constructor(
         }.filter { it.key.isNotBlank() }
         fun strList(k: String): List<String> =
             (root?.get(k) as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
+        // 分层中文语义（tierLabels: {"S":"成交高价值",...}），模板可覆盖
+        val tierLabels = runCatching {
+            (root?.get("tierLabels") as? JsonObject)?.let { obj ->
+                obj.keys.mapNotNull { k ->
+                    (obj[k]?.jsonPrimitive?.content)?.takeIf { it.isNotBlank() }?.let { k to it }
+                }.toMap()
+            }.orEmpty()
+        }.getOrDefault(emptyMap())
         WbResult.Success(
             WbSchemaBundle(
                 fields = list,
                 tiers = strList("tiers").ifEmpty { strList("levels") }.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
                 identityTags = strList("identityTags"),
-                attributeTags = strList("attributeTags")
+                attributeTags = strList("attributeTags"),
+                tierLabels = tierLabels
             )
         )
     }

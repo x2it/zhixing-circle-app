@@ -87,15 +87,17 @@ fun CustomerListScreen(
         })
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             GeekTextField(q, { q = it }, placeholder = "搜：姓名 / 电话 / 楼盘 / 区域")
-            // 分层筛选（六层语义：S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交 U未分类）
+            // 分层筛选：完全跟随模板（行业可换，不写死）
+            val tierMeta = vm.templateMeta.collectAsStateWithLifecycle().value
+            val tierToEnum = mapOf(
+                "S" to IntentLevel.S, "A" to IntentLevel.A, "B" to IntentLevel.B,
+                "C" to IntentLevel.C, "D" to IntentLevel.D, "V" to IntentLevel.V, "U" to IntentLevel.U
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                LevelFilterChip("S", IntentLevel.S, level) { level = if (level == it) null else it }
-                LevelFilterChip("A", IntentLevel.A, level) { level = if (level == it) null else it }
-                LevelFilterChip("B", IntentLevel.B, level) { level = if (level == it) null else it }
-                LevelFilterChip("C", IntentLevel.C, level) { level = if (level == it) null else it }
-                LevelFilterChip("D", IntentLevel.D, level) { level = if (level == it) null else it }
-                LevelFilterChip("V", IntentLevel.V, level) { level = if (level == it) null else it }
-                LevelFilterChip("/", IntentLevel.U, level) { level = if (level == it) null else it }
+                tierMeta.tiers.forEach { t ->
+                    val en = tierToEnum[t] ?: return@forEach
+                    LevelFilterChip(tierMeta.tierBadge(t), en, level) { level = if (level == it) null else it }
+                }
                 if (level != null || tagName != null) {
                     Text(
                         "清除筛选",

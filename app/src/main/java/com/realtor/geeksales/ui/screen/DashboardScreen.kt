@@ -113,14 +113,18 @@ fun DashboardScreen(
 
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("分层分布（S成交高价值 A高意向 B已接触 C信息完整 D线索 V已成交 U未分类）", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    IntentRow("S", intentMap["S"] ?: 0, IntentS, maxCount)
-                    IntentRow("A", intentMap["A"] ?: 0, IntentA, maxCount)
-                    IntentRow("B", intentMap["B"] ?: 0, IntentB, maxCount)
-                    IntentRow("C", intentMap["C"] ?: 0, IntentC, maxCount)
-                    IntentRow("D", intentMap["D"] ?: 0, IntentD, maxCount)
-                    IntentRow("V", intentMap["V"] ?: 0, IntentV, maxCount)
-                    IntentRow("/", intentMap["U"] ?: 0, IntentU, maxCount)
+                    val tierMeta = vm.templateMeta.collectAsStateWithLifecycle().value
+                    Text(
+                        "分层分布（${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}）",
+                        color = Accent, style = MaterialTheme.typography.labelMedium
+                    )
+                    val tierColor = mapOf(
+                        "S" to IntentS, "A" to IntentA, "B" to IntentB, "C" to IntentC,
+                        "D" to IntentD, "V" to IntentV, "U" to IntentU
+                    )
+                    tierMeta.tiers.forEach { t ->
+                        IntentRow(tierMeta.tierBadge(t), intentMap[t] ?: 0, tierColor[t] ?: Accent, maxCount)
+                    }
                 }
             }
 

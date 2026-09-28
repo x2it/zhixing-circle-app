@@ -100,17 +100,18 @@ class ImportExportViewModel @Inject constructor(
                 is WbResult.Error -> _status.value = IOStatus(message = "拉取模板失败：${r.message}（线上需已开放 /api/schema 接口）")
                 is WbResult.Success -> {
                     val bundle = r.data
-                    // 模板元数据（tiers/标签）始终落库，驱动筛选与标签选择器
+                    // 模板元数据（tiers/分层语义/标签）始终落库，驱动筛选与标签选择器
                     val oldMeta = schemaStore.meta()
                     schemaStore.saveMeta(
                         TemplateMeta(
                             tiers = bundle.tiers.ifEmpty { oldMeta.tiers },
                             identityTags = bundle.identityTags.ifEmpty { oldMeta.identityTags },
-                            attributeTags = bundle.attributeTags.ifEmpty { oldMeta.attributeTags }
+                            attributeTags = bundle.attributeTags.ifEmpty { oldMeta.attributeTags },
+                            tierLabels = bundle.tierLabels.ifEmpty { oldMeta.tierLabels }
                         )
                     )
                     if (bundle.fields.isEmpty()) {
-                        _status.value = IOStatus(message = "线上模板已同步（分层 ${bundle.tiers.joinToString("/")}；标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个）")
+                        _status.value = IOStatus(message = "线上模板已同步（分层 ${bundle.tiers.joinToString("/") { if (it == "U") "/" else it }}；标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个）")
                         return@withContext
                     }
                     val remote = bundle.fields.map {
@@ -126,7 +127,7 @@ class ImportExportViewModel @Inject constructor(
                         )
                     }
                     val merged = schemaStore.mergeRemote(remote)
-                    _status.value = IOStatus(message = "模板已同步：${merged.size} 个字段 · 分层 ${bundle.tiers.joinToString("/")} · 标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个")
+                    _status.value = IOStatus(message = "模板已同步：${merged.size} 个字段 · 分层 ${bundle.tiers.joinToString("/") { if (it == "U") "/" else it }} · 标签 ${bundle.identityTags.size + bundle.attributeTags.size} 个")
                 }
             }
         }
@@ -134,6 +135,7 @@ class ImportExportViewModel @Inject constructor(
 
     /** 当前生效模板 */
     fun currentSchema(): List<FieldDef> = schemaStore.current()
+    fun meta(): com.realtor.geeksales.data.schema.TemplateMeta = schemaStore.meta()
 
     /** 添加本地自定义字段并推送线上（线上失败仅提示，本地仍生效——离线可用） */
     fun addCustomField(key: String, label: String, type: String, options: List<String>) = doRun("添加自定义字段中…") {
@@ -1312,6 +1314,14 @@ class ImportExportViewModel @Inject constructor(
             // 2) 镜像本地系统通话记录（增量，本地备份的第一道保险）
             progress(0.08f, "读取本机通话记录…")
             val mirror = callLogReader.mirrorLocalCallLog()
+            if (mirror.error != null) {
+                _status.value = IOStatus(
+                    message = "读取本机通话记录失败：${mirror.error}",
+                    isError = true,
+                    syncSummary = "请确认已授予「通话记录」权限：系统设置 → 应用 → TMA → 权限 → 电话/通话记录；授予后重试"
+                )
+                return@withContext
+            }
             // 3) 推送未上传通话（增量，≤100/批；direction/callDate 按线上契约）
             val toPush = repo.pendingCallUploads(500)
             var pushed = 0

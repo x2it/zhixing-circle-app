@@ -34,15 +34,30 @@ data class FieldDef(
 
 /** 模板元数据：分层（tiers）+ 身份标签 + 属性标签（线上模板下发，驱动筛选 chips 与标签选择器） */
 data class TemplateMeta(
-    /** 分层选项：S/A/B/C/D/V/U（顺序即展示顺序） */
+    /** 分层选项：S/A/B/C/D/V/U（顺序即展示顺序；模板更换时跟随线上 tiers） */
     val tiers: List<String> = listOf("S", "A", "B", "C", "D", "V", "U"),
     /** 身份标签：买房客户 / 卖房业主 / 租客 / 业主 / 中介同行 */
     val identityTags: List<String> = emptyList(),
     /** 属性标签：学区房 / 地铁房 / 改善型 … */
-    val attributeTags: List<String> = emptyList()
+    val attributeTags: List<String> = emptyList(),
+    /** 分层中文语义（模板可覆盖）：S→成交高价值…U→未分类；缺省用房产语义 */
+    val tierLabels: Map<String, String> = DEFAULT_TIER_LABELS
 ) {
     /** 全部模板标签（身份 + 属性，去重保序），供编辑页标签选择器 */
     val allTags: List<String> get() = (identityTags + attributeTags).distinct()
+
+    /** 分层的展示字母（U 显示为 /，用户明确要求） */
+    fun tierBadge(t: String): String = if (t == "U") "/" else t
+
+    /** 分层的完整语义文案：字母 · 语义（U 显示为 / · 未分类） */
+    fun tierLabel(t: String): String = "${tierBadge(t)} · ${tierLabels[t] ?: t}"
+
+    companion object {
+        val DEFAULT_TIER_LABELS: Map<String, String> = mapOf(
+            "S" to "成交高价值", "A" to "高意向", "B" to "已接触", "C" to "信息完整",
+            "D" to "线索", "V" to "已成交", "U" to "未分类"
+        )
+    }
 }
 
 /** 内置字段 key 集合（值存 Customer 主表列） */
@@ -113,16 +128,25 @@ class SchemaStore @Inject constructor(
         val parts = raw.split("~")
         if (parts.size < 3) return defaultMeta()
         fun list(s: String) = s.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        // 第 4 段为分层语义（S:成交高价值,A:高意向,…）；旧缓存无此段 → 默认语义
+        val labels = if (parts.size >= 4) {
+            parts[3].split(",").mapNotNull { seg ->
+                val i = seg.indexOf(':')
+                if (i <= 0) null else seg.substring(0, i).trim() to seg.substring(i + 1).trim()
+            }.filter { it.second.isNotBlank() }.toMap()
+        } else emptyMap()
         return TemplateMeta(
             tiers = list(parts[0]).ifEmpty { defaultMeta().tiers },
             identityTags = list(parts[1]),
-            attributeTags = list(parts[2])
+            attributeTags = list(parts[2]),
+            tierLabels = labels.ifEmpty { TemplateMeta.DEFAULT_TIER_LABELS }
         )
     }
 
     fun saveMeta(m: TemplateMeta) {
         fun join(l: List<String>) = l.joinToString(",")
-        prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}").apply()
+        val labels = m.tierLabels.entries.joinToString(",") { "${it.key}:${it.value}" }
+        prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}~$labels").apply()
     }
 
     /** 内置默认模板（房产销售场景，开箱即用） */

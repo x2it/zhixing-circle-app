@@ -18,8 +18,12 @@ import javax.inject.Inject
 
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
-    private val repo: CustomerRepository
+    private val repo: CustomerRepository,
+    private val schemaStore: com.realtor.geeksales.data.schema.SchemaStore
 ) : ViewModel() {
+    /** 模板分层（行业可换，驱动分层分布与语义文案） */
+    val templateMeta: StateFlow<com.realtor.geeksales.data.schema.TemplateMeta> =
+        kotlinx.coroutines.flow.MutableStateFlow(schemaStore.meta())
 
     val totalCustomers: StateFlow<Int> = repo.observeCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)

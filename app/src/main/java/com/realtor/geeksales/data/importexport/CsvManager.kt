@@ -33,13 +33,16 @@ class CsvManager @Inject constructor(
     private val schemaStore: SchemaStore
 ) {
     companion object {
-        /** 内置 23 列表头（v1.7 起含通讯录对齐字段）；扩展字段列追加其后，表头格式 label(key) */
-        val HEADERS = arrayOf(
-            "姓名", "手机号", "备用电话", "性别", "年龄",
-            "微信", "来源", "意向区域", "预算(万)下限", "预算(万)上限",
-            "房型", "意向楼盘", "意向等级(A/B/C/D/U)", "备注", "下次跟进(YYYY-MM-DD)",
-            "邮箱", "公司", "职位", "地址", "昵称", "网站", "生日(YYYY-MM-DD)", "即时消息"
-        )
+        /** 内置 23 列表头（跟随模板分层语义；扩展字段列追加其后，表头格式 label(key)） */
+        fun headers(tiers: List<String>): Array<String> {
+            val tierBadge = { t: String -> if (t == "U") "/" else t }
+            return arrayOf(
+                "姓名", "手机号", "备用电话", "性别", "年龄",
+                "微信", "来源", "意向区域", "预算(万)下限", "预算(万)上限",
+                "房型", "意向楼盘", "意向等级(${tiers.joinToString("/") { tierBadge(it) }})", "备注", "下次跟进(YYYY-MM-DD)",
+                "邮箱", "公司", "职位", "地址", "昵称", "网站", "生日(YYYY-MM-DD)", "即时消息"
+            )
+        }
         const val BUILTIN_COLS = 23
     }
 
@@ -184,7 +187,7 @@ class CsvManager @Inject constructor(
         os.use {
             os.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())) // UTF-8 BOM for Excel
             val writer = CSVWriterBuilder(OutputStreamWriter(os, Charsets.UTF_8)).build()
-            writer.writeNext(HEADERS + extDefs.map { extHeader(it) }.toTypedArray())
+            writer.writeNext(headers(schemaStore.meta().tiers) + extDefs.map { extHeader(it) }.toTypedArray())
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
             all.forEach { c ->
                 val ext = extByCustomer[c.id].orEmpty()
