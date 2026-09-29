@@ -578,7 +578,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwriteSms = false },
             title = { Text("覆盖本地短信记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份本地短信到「下载/TMA备份」→ 清空本地短信记录 → 以云端短信全量重建（含客户关联）。\n覆盖后本地记录被云端数据替换，原数据见备份文件！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份本地短信到「下载/TMA备份」→ 清空本地短信记录 → 以云端短信全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwriteSms = false; vm.overwriteSms() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
@@ -593,7 +593,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwriteCalls = false },
             title = { Text("覆盖本地通话记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份本地通话到「下载/TMA备份」→ 清空本地通话记录 → 以云端通话全量重建（含客户关联）。\n覆盖后本地记录被云端数据替换，原数据见备份文件！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份本地通话到「下载/TMA备份」→ 清空本地通话记录 → 以云端通话全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwriteCalls = false; vm.overwriteCalls() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)

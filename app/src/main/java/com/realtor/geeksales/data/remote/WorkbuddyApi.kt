@@ -370,13 +370,22 @@ class WorkbuddyApi @Inject constructor(
         val all = mutableListOf<WbMessage>()
         var page = 1
         while (true) {
-            val body = get("/messages?page=$page&pageSize=$PAGE_SIZE")
-                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key（线上 /api/messages 接口需已开放）")
+            // 单页失败自动重试（0.5s→1s→2s 退避），防网关限流导致大分页中途失败被误判为"拉取完成"
+            var body: String? = null
+            var attempt = 0
+            while (attempt < 3) {
+                body = get("/messages?page=$page&pageSize=$PAGE_SIZE")
+                if (body != null) break
+                attempt++
+                kotlinx.coroutines.delay(500L shl attempt)
+            }
+            if (body == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key（线上 /api/messages 接口需已开放）")
             val r = runCatching { json.decodeFromString<WbMessagePage>(body) }
                 .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
+            kotlinx.coroutines.delay(120)  // 分页限速，避免高频翻页触发网关限流
         }
         WbResult.Success(all)
     }
@@ -558,13 +567,21 @@ class WorkbuddyApi @Inject constructor(
         val all = mutableListOf<WbCall>()
         var page = 1
         while (true) {
-            val body = get("/calls?page=$page&pageSize=$PAGE_SIZE")
-                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            var body: String? = null
+            var attempt = 0
+            while (attempt < 3) {
+                body = get("/calls?page=$page&pageSize=$PAGE_SIZE")
+                if (body != null) break
+                attempt++
+                kotlinx.coroutines.delay(500L shl attempt)
+            }
+            if (body == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             val r = runCatching { json.decodeFromString<WbCallPage>(body) }
                 .getOrElse { return@withContext WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
             all += r.items
             if (r.items.size < PAGE_SIZE || all.size >= r.total) break
             page++
+            kotlinx.coroutines.delay(120)
         }
         WbResult.Success(all)
     }

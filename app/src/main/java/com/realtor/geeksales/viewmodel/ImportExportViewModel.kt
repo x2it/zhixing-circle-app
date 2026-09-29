@@ -1309,6 +1309,14 @@ class ImportExportViewModel @Inject constructor(
                 }
                 is WbResult.Success -> r.data
             }
+            // 云端为空：中止并保留本地，绝不静默清空（防止云端数据缺失时本地被清成空）
+            if (remote.isEmpty()) {
+                _status.value = IOStatus(
+                    message = "云端当前没有短信（线上短信库为空），本地记录已保留未动；请先在云端确认短信存在后再覆盖",
+                    isError = true
+                )
+                return@withContext
+            }
             progress(0.5f, "重建本地短信记录…")
             repo.clearAllSms()
             val customerByWbId = HashMap<String, Customer>()
@@ -1360,6 +1368,14 @@ class ImportExportViewModel @Inject constructor(
                     return@withContext
                 }
                 is WbResult.Success -> r.data
+            }
+            // 云端为空：中止并保留本地，绝不静默清空
+            if (remote.isEmpty()) {
+                _status.value = IOStatus(
+                    message = "云端当前没有通话记录（线上通话库为空），本地记录已保留未动；请先在云端确认记录存在后再覆盖",
+                    isError = true
+                )
+                return@withContext
             }
             progress(0.5f, "重建本地通话记录…")
             repo.clearAllCalls()
