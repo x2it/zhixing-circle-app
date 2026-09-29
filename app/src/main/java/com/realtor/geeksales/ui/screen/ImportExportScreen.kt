@@ -95,9 +95,7 @@ fun ImportExportScreen(
     var confirmOverwrite by remember { mutableStateOf(false) }
     var confirmOverwriteSms by remember { mutableStateOf(false) }
     var confirmOverwriteCalls by remember { mutableStateOf(false) }
-    var confirmClearCloudSms by remember { mutableStateOf(false) }
-    var confirmClearCloudCalls by remember { mutableStateOf(false) }
-    var confirmClearCloudContacts by remember { mutableStateOf(false) }
+    var confirmClearCloudAll by remember { mutableStateOf(false) }
     var confirmResetSmsSync by remember { mutableStateOf(false) }
     var confirmResetCallSync by remember { mutableStateOf(false) }
     var confirmClearSysSms by remember { mutableStateOf(false) }
@@ -278,7 +276,7 @@ fun ImportExportScreen(
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("地址应为 域名 + /api（如 https://people.app.workbuddy.host/api）；保存时自动补 /api 并清理多余字符", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    Text("地址应为 自建服务端 域名 + /api（如 https://your-server.com/api）；保存时自动补 /api 并清理多余字符", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                     GeekGhostButton("恢复默认", color = if (busy) TextMuted else Warning, onClick = {
                         if (busy) return@GeekGhostButton
                         vm.resetBaseUrl()
@@ -552,9 +550,7 @@ fun ImportExportScreen(
                 Text("云端数据（清空 / 重置，均不可撤销）", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.height(4.dp))
                 val cloudBtns = listOf<Pair<String, () -> Unit>>(
-                    "清空云端短信" to { if (!busy) confirmClearCloudSms = true },
-                    "清空云端通话" to { if (!busy) confirmClearCloudCalls = true },
-                    "清空云端通讯录" to { if (!busy) confirmClearCloudContacts = true },
+                    "一键清空云端全部" to { if (!busy) confirmClearCloudAll = true },
                     "重置短信同步状态" to { if (!busy) confirmResetSmsSync = true },
                     "重置通话同步状态" to { if (!busy) confirmResetCallSync = true }
                 )
@@ -564,7 +560,7 @@ fun ImportExportScreen(
                         if (row.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
-                Text("清空云端后点「同步到云端」可用真实时间重传；重置 = 清本地增量标记，下次全量对账（服务端幂等不重复）。", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                Text("一键清空云端 = 联系人+短信+通话+标签+批次全清（本机数据不受影响），清空后点各「同步到云端」即用本机数据重建；重置 = 清本地增量标记，下次全量对账（幂等不重复）。", color = TextMuted, style = MaterialTheme.typography.bodySmall)
             }
 
             // ================= 清空手机系统数据（删除系统库本身，不可恢复；强确认=输入「清空」） =================
@@ -674,42 +670,16 @@ fun ImportExportScreen(
             }
         )
     }
-    if (confirmClearCloudSms) {
+    if (confirmClearCloudAll) {
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearCloudSms = false },
-            title = { Text("清空云端短信记录？", color = TextPrimary) },
-            text = { Text("将删除云端全部短信记录（本地手机短信不受影响）。旧版备份的日期是备份时刻，无法修复；清空后请点「同步到云端」用真实时间重新上传。此操作不可恢复。", color = TextSecondary) },
+            onDismissRequest = { confirmClearCloudAll = false },
+            title = { Text("一键清空云端全部？", color = TextPrimary) },
+            text = { Text("将删除云端全部数据：联系人、短信、通话、标签、导入批次（本机数据与手机通讯录均不受影响）。清空后点各「同步到云端」即可用本机数据全量重建。此操作不可恢复，请确认！", color = TextSecondary) },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudSms = false; vm.clearCloudSms() }) {
+                androidx.compose.material3.TextButton(onClick = { confirmClearCloudAll = false; vm.clearCloudAll() }) {
                     Text("确认清空", color = Danger)
                 }
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudSms = false }) { Text("取消", color = TextSecondary) }
-            }
-        )
-    }
-    if (confirmClearCloudCalls) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearCloudCalls = false },
-            title = { Text("清空云端通话记录？", color = TextPrimary) },
-            text = { Text("将删除云端全部通话记录（本地手机通话记录不受影响）。旧版备份的日期是备份时刻，无法修复；清空后请点「同步到云端」用真实时间重新上传。此操作不可恢复。", color = TextSecondary) },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudCalls = false; vm.clearCloudCalls() }) {
-                    Text("确认清空", color = Danger)
-                }
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudCalls = false }) { Text("取消", color = TextSecondary) }
-            }
-        )
-    }
-    if (confirmClearCloudContacts) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmClearCloudContacts = false },
-            title = { Text("清空云端通讯录？", color = TextPrimary) },
-            text = { Text("将删除云端全部联系人（本地客户与手机通讯录不受影响）。之后可点「同步到云端」重传，或「覆盖通讯录」以 App 内客户重建云端。此操作不可恢复。", color = TextSecondary) },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudContacts = false; vm.clearCloudContacts() }) {
-                    Text("确认清空", color = Danger)
-                }
-                androidx.compose.material3.TextButton(onClick = { confirmClearCloudContacts = false }) { Text("取消", color = TextSecondary) }
+                androidx.compose.material3.TextButton(onClick = { confirmClearCloudAll = false }) { Text("取消", color = TextSecondary) }
             }
         )
     }

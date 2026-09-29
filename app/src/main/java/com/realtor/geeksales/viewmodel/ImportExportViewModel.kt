@@ -690,68 +690,35 @@ class ImportExportViewModel @Inject constructor(
         }
     }
 
+    /** 一键清空云端全部数据（POST /api/data/clear，服务端唯一清空通道）。
+     *  清空范围：联系人 + 标签 + 跟进 + 短信 + 通话 + 导入批次（按用户隔离）。
+     *  清空后点各「同步到云端」即可用本地数据全量重建（服务端幂等，不会重复）。 */
+    fun clearCloudAll() = doRun("一键清空云端中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
+                return@withContext
+            }
+            when (val r = wbApi.clearAllCloudData()) {
+                is WbResult.Success -> {
+                    val m = r.data
+                    _status.value = IOStatus(
+                        message = "已清空云端：联系人 ${m["contacts"] ?: 0}、短信 ${m["messages"] ?: 0}、标签 ${m["tags"] ?: 0}、批次 ${m["batches"] ?: 0}",
+                        syncSummary = "云端已空。现在点各「同步到云端」即可用本机数据全量重建（联系人/通话本地均在，短信需短信权限）"
+                    )
+                }
+                is WbResult.Error -> _status.value = IOStatus(message = "清空云端失败：${r.message}", isError = true, syncSummary = "确认 API Key 有效后重试；若接口不可达请联系服务端确认 /api/data/clear 已上线")
+            }
+        }
+    }
+
     /** v2.7.2 存量数据治理：清空云端短信，供用户以真实时间戳重传（幂等键含日期，不清空直接重传会重复） */
-    fun clearCloudSms() = doRun("清空云端短信中…") {
-        withContext(Dispatchers.IO) {
-            if (apiKeyStore.load().isNullOrBlank()) {
-                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
-                return@withContext
-            }
-            when (val r = wbApi.fetchAllMessages()) {
-                is WbResult.Success -> {
-                    val ids = r.data.map { it.id }.filter { it.isNotBlank() }
-                    if (ids.isEmpty()) { _status.value = IOStatus(message = "云端短信已是空的，无需清空"); return@withContext }
-                    when (val d = wbApi.deleteMessages(ids)) {
-                        is WbResult.Success -> _status.value = IOStatus(message = "已清空云端短信 ${ids.size} 条（存量日期错误数据已移除）", syncSummary = "请点「同步到云端」重新上传真实时间戳数据")
-                        is WbResult.Error -> _status.value = IOStatus(message = "清空失败：${d.message}", isError = true)
-                    }
-                }
-                is WbResult.Error -> _status.value = IOStatus(message = "拉取云端短信失败：${r.message}", isError = true)
-            }
-        }
-    }
+    fun clearCloudSms() = clearCloudAll()
+    /** v2.7.2 存量数据治理：清空云端通话（同上）——服务端无单类型清空接口，统一走一键清空 */
+    fun clearCloudCalls() = clearCloudAll()
 
-    /** v2.7.2 存量数据治理：清空云端通话（同上） */
-    fun clearCloudCalls() = doRun("清空云端通话中…") {
-        withContext(Dispatchers.IO) {
-            if (apiKeyStore.load().isNullOrBlank()) {
-                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
-                return@withContext
-            }
-            when (val r = wbApi.fetchAllCalls()) {
-                is WbResult.Success -> {
-                    val ids = r.data.map { it.id }.filter { it.isNotBlank() }
-                    if (ids.isEmpty()) { _status.value = IOStatus(message = "云端通话已是空的，无需清空"); return@withContext }
-                    when (val d = wbApi.deleteCalls(ids)) {
-                        is WbResult.Success -> _status.value = IOStatus(message = "已清空云端通话 ${ids.size} 条（存量日期错误数据已移除）", syncSummary = "请点「同步到云端」重新上传真实时间戳数据")
-                        is WbResult.Error -> _status.value = IOStatus(message = "清空失败：${d.message}", isError = true)
-                    }
-                }
-                is WbResult.Error -> _status.value = IOStatus(message = "拉取云端通话失败：${r.message}", isError = true)
-            }
-        }
-    }
-
-    /** 清空云端通讯录（v2.7.0：覆盖通讯录前清理云端存量；服务端 DELETE /contacts 需 v2.7.4+） */
-    fun clearCloudContacts() = doRun("清空云端通讯录中…") {
-        withContext(Dispatchers.IO) {
-            if (apiKeyStore.load().isNullOrBlank()) {
-                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
-                return@withContext
-            }
-            when (val r = wbApi.fetchAllContacts()) {
-                is WbResult.Success -> {
-                    val ids = r.data.map { it.id }.filter { it.isNotBlank() }
-                    if (ids.isEmpty()) { _status.value = IOStatus(message = "云端通讯录已是空的，无需清空"); return@withContext }
-                    when (val d = wbApi.deleteContacts(ids)) {
-                        is WbResult.Success -> _status.value = IOStatus(message = "已清空云端通讯录 ${ids.size} 个联系人", syncSummary = "仅影响云端；本地与手机通讯录不受影响。之后「覆盖通讯录」会以 App 内客户重建云端")
-                        is WbResult.Error -> _status.value = IOStatus(message = "清空失败：${d.message}", isError = true, syncSummary = "若提示接口 404：请先更新服务端（DELETE /api/contacts 批量删除接口，v2.7.4+），App 按钮已就绪")
-                    }
-                }
-                is WbResult.Error -> _status.value = IOStatus(message = "拉取云端通讯录失败：${r.message}", isError = true)
-            }
-        }
-    }
+    /** 清空云端通讯录（v2.7.0 起：服务端无单类型/批量删除接口，统一走一键清空云端全部） */
+    fun clearCloudContacts() = clearCloudAll()
 
     /** 重置短信同步状态：清空短信增量游标，下次「同步到云端」全量对账（服务端幂等，不会重复）。
      *  适用：系统短信被清空/恢复后游标异常、怀疑漏推时；短信同步本身始终读系统短信库，重置只清游标不影响本地 */
