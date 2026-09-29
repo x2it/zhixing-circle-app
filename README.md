@@ -91,6 +91,6 @@ app/src/main/java/com/realtor/geeksales/
 
 ## License
 
-MIT License - 见 [LICENSE](LICENSE)
+GNU Affero General Public License v3.0 (AGPL-3.0) - 见 [LICENSE](LICENSE)
 
 © 2026 知行工作室
