@@ -182,14 +182,10 @@ class SchemaStore @Inject constructor(
         FieldDef(BuiltinKeys.NICKNAME, "昵称", "text", "联系信息", order = 15),
         FieldDef(BuiltinKeys.ADDRESS, "地址", "text", "联系信息", order = 16),
         FieldDef(BuiltinKeys.WEBSITE, "网站", "text", "联系信息", order = 17),
-        FieldDef(BuiltinKeys.AREA_PREF, "意向区域", "text", "购房需求", order = 20),
-        FieldDef(BuiltinKeys.BUDGET_MIN, "预算下限(万)", "number", "购房需求", order = 21),
-        FieldDef(BuiltinKeys.BUDGET_MAX, "预算上限(万)", "number", "购房需求", order = 22),
-        FieldDef(BuiltinKeys.HOUSE_TYPE, "房型偏好", "text", "购房需求", order = 23),
-        FieldDef(BuiltinKeys.TARGET_PROJECT, "意向楼盘", "text", "购房需求", order = 24),
-        FieldDef(BuiltinKeys.INTENT_LEVEL, "意向等级", "select", "意向与跟进", options = listOf("S", "A", "B", "C", "D", "V", "U"), order = 30),
-        FieldDef(BuiltinKeys.NEXT_FOLLOW_AT, "下次跟进", "date", "意向与跟进", order = 31),
-        FieldDef(BuiltinKeys.NOTE, "备注", "textarea", "意向与跟进", order = 32)
+        // 行业写死字段一律不预设：意向区域/预算上下限/房型偏好/意向楼盘等由线上模板提供（拉取后作为扩展字段）
+        FieldDef(BuiltinKeys.INTENT_LEVEL, "意向等级", "select", "意向与跟进", options = listOf("S", "A", "B", "C", "D", "V", "U"), order = 20),
+        FieldDef(BuiltinKeys.NEXT_FOLLOW_AT, "下次跟进", "date", "意向与跟进", order = 21),
+        FieldDef(BuiltinKeys.NOTE, "备注", "textarea", "意向与跟进", order = 22)
     )
 
     /** 当前生效 schema：本地缓存（含线上合并与自定义）或默认模板 */

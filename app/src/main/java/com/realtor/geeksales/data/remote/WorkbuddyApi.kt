@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
@@ -429,7 +430,7 @@ class WorkbuddyApi @Inject constructor(
     // ---- v2.6.0 分片上传通道：start → chunk(≤100/片) → commit；commit 成功才算完成（网关 1MB 硬限规避） ----
 
     @kotlinx.serialization.Serializable
-    data class WbSyncStart(val uploadId: String = "", val limits: Map<String, String> = emptyMap())
+    data class WbSyncStart(val uploadId: String = "", val limits: Map<String, Long> = emptyMap(), val received: Int = 0, val total: Int = 0)
 
     @kotlinx.serialization.Serializable
     data class WbSyncChunk(val uploadId: String = "", val received: Int = 0, val total: Int = 0)
@@ -450,7 +451,10 @@ class WorkbuddyApi @Inject constructor(
             val startResp = post("/sync/upload/start", startBody)
                 ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(startResp)) return@withContext WbResult.Error(extractError(startResp))
-            val uploadId = runCatching { json.decodeFromString<WbSyncStart>(startResp).uploadId }.getOrNull()
+            // 手动取 uploadId：start 响应含 limits 数字对象，反序列化整包易因类型不匹配失败（v2.6.2 实测）
+            val uploadId = runCatching {
+                json.parseToJsonElement(startResp).jsonObject["uploadId"]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
                 ?: return@withContext WbResult.Error("分片上传启动失败：响应解析异常（${startResp.take(120)}）")
             // 2) chunk ×N（≤100/片，顺序上传；任一片失败立即中止，commit 未发生则云端不写库）
             items.chunked(100).forEachIndexed { i, chunk ->

@@ -509,22 +509,16 @@ fun ImportExportScreen(
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
             SectionCard("字段说明", "通用列全行业适用；模板扩展列与分层跟随当前模板，换行业拉取新模板即可") {
                 val fields = vm.currentSchema().sortedBy { it.order }
-                // 内置通用列 vs 内置扩展列（默认模板的业务扩展字段；换行业模板后由线上模板字段接管）
-                val reKeys = setOf("areaPref", "budgetMin", "budgetMax", "houseType", "targetProject")
-                val commonNames = fields.filter { it.builtin && it.key !in reKeys }.map { it.label }
-                val reNames = fields.filter { it.builtin && it.key in reKeys }.map { it.label }
+                val commonNames = fields.filter { it.builtin }.map { it.label }
                 val customNames = fields.filter { !it.builtin }.map { it.label }
                 val tierMeta = vm.meta()
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "内置通用列（全行业）：${commonNames.joinToString("、")}",
+                        "内置通用列（全行业通用，无行业预设）：${commonNames.joinToString("、")}",
                         color = TextPrimary, style = MaterialTheme.typography.bodyMedium
                     )
-                    if (reNames.isNotEmpty()) {
-                        Text("内置扩展列（默认模板）：${reNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                    }
                     if (customNames.isNotEmpty()) {
-                        Text("扩展列（跟随当前模板）：${customNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("扩展列（来自线上模板或本地添加）：${customNames.joinToString("、")}", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     } else {
                         Text("扩展列：暂无（点「拉取线上模板」或「添加字段」即可新增，不限于行业）", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
