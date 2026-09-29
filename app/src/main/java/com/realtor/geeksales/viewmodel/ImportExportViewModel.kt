@@ -690,6 +690,57 @@ class ImportExportViewModel @Inject constructor(
         }
     }
 
+    /** v2.7.2 存量数据治理：清空云端短信，供用户以真实时间戳重传（幂等键含日期，不清空直接重传会重复） */
+    fun clearCloudSms() = doRun("清空云端短信中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
+                return@withContext
+            }
+            when (val r = wbApi.fetchAllMessages()) {
+                is WbResult.Success -> {
+                    val ids = r.data.map { it.id }.filter { it.isNotBlank() }
+                    if (ids.isEmpty()) { _status.value = IOStatus(message = "云端短信已是空的，无需清空"); return@withContext }
+                    when (val d = wbApi.deleteMessages(ids)) {
+                        is WbResult.Success -> _status.value = IOStatus(message = "已清空云端短信 ${ids.size} 条（存量日期错误数据已移除）", syncSummary = "请点「同步到云端」重新上传真实时间戳数据")
+                        is WbResult.Error -> _status.value = IOStatus(message = "清空失败：${d.message}", isError = true)
+                    }
+                }
+                is WbResult.Error -> _status.value = IOStatus(message = "拉取云端短信失败：${r.message}", isError = true)
+            }
+        }
+    }
+
+    /** v2.7.2 存量数据治理：清空云端通话（同上） */
+    fun clearCloudCalls() = doRun("清空云端通话中…") {
+        withContext(Dispatchers.IO) {
+            if (apiKeyStore.load().isNullOrBlank()) {
+                _status.value = IOStatus(message = "请先配置 API Key", isError = true)
+                return@withContext
+            }
+            when (val r = wbApi.fetchAllCalls()) {
+                is WbResult.Success -> {
+                    val ids = r.data.map { it.id }.filter { it.isNotBlank() }
+                    if (ids.isEmpty()) { _status.value = IOStatus(message = "云端通话已是空的，无需清空"); return@withContext }
+                    when (val d = wbApi.deleteCalls(ids)) {
+                        is WbResult.Success -> _status.value = IOStatus(message = "已清空云端通话 ${ids.size} 条（存量日期错误数据已移除）", syncSummary = "请点「同步到云端」重新上传真实时间戳数据")
+                        is WbResult.Error -> _status.value = IOStatus(message = "清空失败：${d.message}", isError = true)
+                    }
+                }
+                is WbResult.Error -> _status.value = IOStatus(message = "拉取云端通话失败：${r.message}", isError = true)
+            }
+        }
+    }
+
+    /** v2.7.3 设备握手：进数据页登记设备与环境（幂等轻量），云端据此下发限制/开关与溯源 */
+    fun syncHandshake() {
+        if (apiKeyStore.load().isNullOrBlank()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { wbApi.syncHandshake() }.getOrNull() }
+            // 失败静默：握手不阻塞任何主流程，云端登记下次进页自动重试
+        }
+    }
+
     // ================= 知行朋友圈（第三方通讯录）双向同步 =================
     // 设计原则：
     //  1) 每次同步前自动全量备份本地客户到「下载/TMA备份」目录（XLSX），防误覆盖；
@@ -2055,7 +2106,8 @@ class ImportExportViewModel @Inject constructor(
         return com.realtor.geeksales.data.remote.WbBatchMeta(
             batchName = "TMA同步 $now",
             source = "tma",
-            deviceInfo = "TMA ${com.realtor.geeksales.BuildConfig.VERSION_NAME} / Android ${android.os.Build.VERSION.RELEASE}"
+            // v2.7.3 11.3：三段式「系统 / 品牌+机型 / App 版本」，云端按设备可溯源
+            deviceInfo = "Android ${android.os.Build.VERSION.RELEASE} / ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} / App v${com.realtor.geeksales.BuildConfig.VERSION_NAME}"
         )
     }
 }

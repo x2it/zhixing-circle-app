@@ -607,6 +607,48 @@ class WorkbuddyApi @Inject constructor(
                 .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
 
+    /** 批量删除线上短信（DELETE /api/messages，{"ids":[…]≤200}，分批执行）——清空重传/数据治理用 */
+    suspend fun deleteMessages(ids: List<String>): WbResult<Unit> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext WbResult.Success(Unit)
+        for (chunk in ids.chunked(200)) {
+            val body = "{\"ids\":[${chunk.joinToString(",") { "\"${esc(it)}\"" }}]}"
+            val resp = request("DELETE", "/messages", body)
+            if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            kotlinx.coroutines.delay(120)
+        }
+        WbResult.Success(Unit)
+    }
+
+    /** 批量删除线上通话（DELETE /api/calls，{"ids":[…]≤200}，分批执行） */
+    suspend fun deleteCalls(ids: List<String>): WbResult<Unit> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext WbResult.Success(Unit)
+        for (chunk in ids.chunked(200)) {
+            val body = "{\"ids\":[${chunk.joinToString(",") { "\"${esc(it)}\"" }}]}"
+            val resp = request("DELETE", "/calls", body)
+            if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+            kotlinx.coroutines.delay(120)
+        }
+        WbResult.Success(Unit)
+    }
+
+    /** v2.7.3 设备握手：冷启动/进数据页登记设备与能力，云端下发 limits/featureFlags（幂等轻量） */
+    suspend fun syncHandshake(): WbResult<Unit> = withContext(Dispatchers.IO) {
+        val body = buildString {
+            append("{\"deviceId\":\"${esc(apiKeyStore.deviceId())}\",")
+            append("\"appVersion\":\"${esc(com.realtor.geeksales.BuildConfig.VERSION_NAME)}\",")
+            append("\"osName\":\"Android\",")
+            append("\"osVersion\":\"${esc(android.os.Build.VERSION.RELEASE)}\",")
+            append("\"deviceBrand\":\"${esc(android.os.Build.MANUFACTURER)}\",")
+            append("\"deviceModel\":\"${esc(android.os.Build.MODEL)}\",")
+            append("\"capabilities\":[\"chunk-upload\",\"real-timestamp\"]}")
+        }
+        val resp = post("/settings/sync-handshake", body)
+        if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        if (is2xx(resp)) WbResult.Success(Unit) else WbResult.Error(extractError(resp))
+    }
+
     /** 删除一条线上通话记录（DELETE /api/calls/:id） */
     suspend fun deleteCall(id: String): WbResult<Unit> = withContext(Dispatchers.IO) {
         val resp = delete("/calls/$id")

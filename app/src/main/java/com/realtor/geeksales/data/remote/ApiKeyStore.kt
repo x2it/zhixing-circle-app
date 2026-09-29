@@ -25,11 +25,16 @@ class ApiKeyStore @Inject constructor(
         private const val PREFS = "tma_prefs"
         private const val KEY_ALIAS = "tma_workbuddy_api_key"
         private const val KEY_CIPHER = "key_cipher"
+        private const val DEVICE_ID = "device_id"
         private const val KEY_IV = "key_iv"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 
     private val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 设备唯一标识（首启生成 UUID 并持久化；卸载重装会变）——v2.7.3 设备握手/溯源用 */
+    fun deviceId(): String = prefs.getString(DEVICE_ID, null)
+        ?: java.util.UUID.randomUUID().toString().also { prefs.edit().putString(DEVICE_ID, it).apply() }
 
     /** 保存 API Key（加密后落盘），返回是否成功 */
     fun save(apiKey: String): Boolean = runCatching {
