@@ -59,6 +59,9 @@ interface CallDao {
     @Query("UPDATE call_records SET wbCallId = :wbId WHERE id = :localId")
     suspend fun updateWbCallId(localId: Long, wbId: String)
 
+    @Query("SELECT * FROM call_records ORDER BY callDate DESC")
+    suspend fun getAll(): List<CallRecord>
+
     @Query("DELETE FROM call_records")
     suspend fun clearAll()
 }

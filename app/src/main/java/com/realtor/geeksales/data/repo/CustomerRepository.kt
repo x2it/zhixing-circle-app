@@ -293,6 +293,7 @@ class CustomerRepository @Inject constructor(
     suspend fun pendingCallUploads(limit: Int = 500): List<CallRecord> = callDao.getPendingUpload(limit)
 
     suspend fun insertCalls(calls: List<CallRecord>) = callDao.insertAll(calls)
+    suspend fun allCalls(): List<CallRecord> = callDao.getAll()
 
     suspend fun callByWbId(wbId: String): CallRecord? = callDao.findByWbCallId(wbId)
 

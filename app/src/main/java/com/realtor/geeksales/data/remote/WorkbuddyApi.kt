@@ -52,7 +52,11 @@ data class WbSchemaBundle(
     val identityTags: List<String> = emptyList(),
     val attributeTags: List<String> = emptyList(),
     /** 分层中文语义（S→成交高价值…），模板可覆盖；空则 App 用默认语义 */
-    val tierLabels: Map<String, String> = emptyMap()
+    val tierLabels: Map<String, String> = emptyMap(),
+    /** 当前生效模板 id（线上 isActive=true；未应用过则为空） */
+    val templateId: String? = null,
+    /** 当前生效模板名 */
+    val templateName: String? = null
 )
 
 /** 批量接口响应（POST /contacts/batch、/followups/batch）：逐条独立处理，errors 含失败明细 */
@@ -75,7 +79,8 @@ data class WbBatchError(
 data class WbBatchResponse(
     val items: List<WbBatchContactResult> = emptyList(),
     val errors: List<WbBatchError> = emptyList(),
-    val created: Int = 0
+    val created: Int = 0,
+    val skipped: Int = 0
 )
 
 /** 批次信息（云端「数据可追溯·时光机」规范）：每次批量同步上报 batchName/source/deviceInfo */
@@ -473,17 +478,40 @@ class WorkbuddyApi @Inject constructor(
                 .getOrElse { WbResult.Error("分片上传提交解析失败：${it.message}") }
         }
 
-    /** 联系人分片上传（内部按 ≤100 条分片，commit 聚合） */
+    /**
+     * 分批分片上传：每批独立 start→chunk→commit（默认每批上限保护 commit 聚合响应体积，
+     * 短信 500/批、通讯录与通话 1000/批）；任一批失败返回该批错误，已成功批次不受影响。
+     */
+    private suspend fun uploadChunkedBatched(kind: String, itemsJson: List<String>, perBatch: Int, batchMeta: WbBatchMeta): WbResult<WbBatchResponse> {
+        var acc = WbBatchResponse(items = emptyList(), created = 0, skipped = 0, errors = emptyList())
+        itemsJson.chunked(perBatch).forEach { part ->
+            when (val r = uploadChunked(kind, part, batchMeta)) {
+                is WbResult.Success -> {
+                    val d = r.data
+                    acc = acc.copy(
+                        created = acc.created + d.created,
+                        skipped = acc.skipped + d.skipped,
+                        errors = acc.errors + d.errors,
+                        items = if (d.items.isNotEmpty()) acc.items + d.items else acc.items
+                    )
+                }
+                is WbResult.Error -> return WbResult.Error(r.message)
+            }
+        }
+        return WbResult.Success(acc)
+    }
+
+    /** 联系人分批分片上传 */
     suspend fun uploadContacts(items: List<WbContact>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
-        uploadChunked("contacts", items.map { buildContactJson(it) }, batchMeta)
+        uploadChunkedBatched("contacts", items.map { buildContactJson(it) }, 1000, batchMeta)
 
-    /** 短信分片上传 */
+    /** 短信分批分片上传（500/批，防大 commit 响应超网关限制） */
     suspend fun uploadMessages(items: List<WbMessage>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
-        uploadChunked("messages", items.map { buildMessageJson(it) }, batchMeta)
+        uploadChunkedBatched("messages", items.map { buildMessageJson(it) }, 500, batchMeta)
 
-    /** 通话记录分片上传 */
+    /** 通话记录分批分片上传 */
     suspend fun uploadCalls(items: List<WbCall>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
-        uploadChunked("calls", items.map { buildCallJson(it) }, batchMeta)
+        uploadChunkedBatched("calls", items.map { buildCallJson(it) }, 1000, batchMeta)
 
     /** 查询线上短信同步开关；false 时 messages 接口会返回 403，应提示用户先在网页开启 */
     suspend fun smsSyncEnabled(): WbResult<Boolean> = withContext(Dispatchers.IO) {
@@ -590,11 +618,15 @@ class WorkbuddyApi @Inject constructor(
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
         val arr = runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull()
             ?: return@withContext WbResult.Error("模板响应解析失败（请确认线上已开放 /api/templates）")
-        // 优先房产模板；不存在则取第一个
-        val target = arr.firstOrNull {
-            (it as? JsonObject)?.get("id")?.jsonPrimitive?.content == "preset-real-estate"
-        } ?: arr.firstOrNull() ?: return@withContext WbResult.Success(WbSchemaBundle())
+        // 模板选择（v2.7.0 线上按用户隔离返回 isActive）：isActive=true 优先；无则回退预设模板；再回退第一个
+        val target = (arr.firstOrNull {
+            (it as? JsonObject)?.get("isActive")?.jsonPrimitive?.content?.toBooleanStrictOrNull() == true
+        } ?: arr.firstOrNull {
+            (it as? JsonObject)?.get("isPreset")?.jsonPrimitive?.content?.toBooleanStrictOrNull() == true
+        } ?: arr.firstOrNull()) ?: return@withContext WbResult.Success(WbSchemaBundle())
         val o = target.jsonObject
+        val tplId = o["id"]?.jsonPrimitive?.content
+        val tplName = o["name"]?.jsonPrimitive?.content
         fun strList(k: String): List<String> =
             (o.get(k) as? JsonArray)?.mapNotNull { it.jsonPrimitive.content }.orEmpty()
         // 线上 tiers 为对象数组 [{value,label,description,color}]：取 value 列表 + description 语义
@@ -634,7 +666,9 @@ class WorkbuddyApi @Inject constructor(
                 tiers = tiers.ifEmpty { listOf("S", "A", "B", "C", "D", "V", "U") },
                 identityTags = tagList("identityTags"),
                 attributeTags = tagList("attributeTags"),
-                tierLabels = tierLabels
+                tierLabels = tierLabels,
+                templateId = tplId,
+                templateName = tplName
             )
         )
     }
@@ -780,6 +814,9 @@ class WorkbuddyApi @Inject constructor(
         }
     }
 
+    /** 轻量拉取线上模板原文（自动跟随检测用，仅比对 isActive 模板 id） */
+    suspend fun templatesRaw(): String? = get("/templates")
+
     /** 密钥连通性检测：GET /templates 轻量探测，2xx=有效；401=已撤销/无效 */
     suspend fun verifyKey(): WbResult<Boolean> = withContext(Dispatchers.IO) {
         val body = get("/templates")
@@ -816,7 +853,7 @@ class WorkbuddyApi @Inject constructor(
                     resp.body?.string()
                 }
             }
-        }.getOrNull()
+        }.getOrElse { "NET_ERR:${it.message ?: it.javaClass.simpleName}" }
     }
 
     /**
@@ -827,6 +864,7 @@ class WorkbuddyApi @Inject constructor(
      */
     private fun is2xx(body: String): Boolean {
         if (body.startsWith("HTTP ")) return false
+        if (body.startsWith("NET_ERR:")) return false
         return runCatching {
             val el = json.parseToJsonElement(body)
             if (el is JsonObject) {
@@ -837,6 +875,10 @@ class WorkbuddyApi @Inject constructor(
     }
 
     private fun extractError(body: String): String {
+        // 网络层异常（OkHttp 抛错）：保留真实原因，提示可自动重试
+        if (body.startsWith("NET_ERR:")) {
+            return "同步失败：网络请求异常（${body.removePrefix("NET_ERR:").take(120)}），已自动重试仍失败，请检查网络后重试"
+        }
         // 非 2xx（HTTP <code>:<body> 前缀）：按状态码给出明确语义，不无脑报成功/笼统报错
         if (body.startsWith("HTTP ")) {
             val status = body.substring(0, body.indexOf(':'))
@@ -851,7 +893,7 @@ class WorkbuddyApi @Inject constructor(
                 "HTTP 403" -> "同步失败：云端该功能未开启或无权访问（请在网页「API 接入」页开启对应同步开关）"
                 "HTTP 404" -> "同步失败：云端接口不存在（${serverMsg ?: "请联系云端补齐接口"}）"
                 "HTTP 429" -> "同步失败：请求过于频繁（429），已自动等待重试仍失败，本地数据未受影响，稍后再试"
-                "HTTP 500" -> "同步失败：数据量过大或线上服务异常（500），已按分片重试仍失败，请稍后再试"
+                "HTTP 500" -> "同步失败：线上服务异常（HTTP 500）${serverMsg?.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}，已自动重试仍失败，请稍后再试"
                 else -> "同步失败（HTTP ${status.removePrefix("HTTP ")}）：${serverMsg?.takeIf { it.isNotBlank() } ?: raw.ifBlank { "服务端错误" }}"
             }
         }

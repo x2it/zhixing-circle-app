@@ -65,6 +65,12 @@ fun ImportExportScreen(
 ) {
     val status by vm.status.collectAsStateWithLifecycle()
     var lastNotified by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        // 自动跟随线上模板：检测 isActive 模板是否变化，变化则自动应用并提示（静默无变化）
+        vm.checkTemplateAuto { name ->
+            if (name != null) GlobalToast.showSuccess("线上模板已切换，已自动应用「$name」，旧模板字段已清理")
+        }
+    }
     LaunchedEffect(status) {
         val m = status.message
         if (m.isEmpty() || m == "idle") return@LaunchedEffect
@@ -77,10 +83,11 @@ fun ImportExportScreen(
         }
     }
     var exportPending by remember { mutableStateOf(false) }
-    var groupPending by remember { mutableStateOf(false) }
     // 危险操作二次确认
     var confirmClear by remember { mutableStateOf(false) }
     var confirmOverwrite by remember { mutableStateOf(false) }
+    var confirmOverwriteSms by remember { mutableStateOf(false) }
+    var confirmOverwriteCalls by remember { mutableStateOf(false) }
     // API Key 输入状态
     var apiKeyInput by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -120,7 +127,6 @@ fun ImportExportScreen(
         if (granted) {
             when {
                 exportPending -> vm.exportContacts()
-                groupPending -> vm.syncGroupsFromTags()
                 else -> vm.importContacts()
             }
         }
@@ -429,14 +435,14 @@ fun ImportExportScreen(
                 val smsGranted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_SMS) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     GeekPrimaryButton(if (busy) "处理中…" else "备份到本地", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
-                    GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else Success, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
+                    GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
                 }
                 Text(
                     if (smsGranted) "短信权限：已授权" else "短信权限：未授权（拒绝后需到系统设置开启）",
                     color = if (smsGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
+                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
                     Spacer(Modifier.weight(1f))
                 }
                 Text("短信属敏感数据：默认仅本地备份（下载/TMA备份）；「同步到云端」仅主动点击时执行。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
@@ -449,7 +455,7 @@ fun ImportExportScreen(
                     GeekPrimaryButton(if (busy) "处理中…" else "同步到云端", {
                         if (!busy) { callAction = 1; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
                     }, Modifier.weight(1f), enabled = !busy)
-                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Accent, onClick = {
+                    GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else TextSecondary, onClick = {
                         if (!busy) { callAction = 2; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
                     })
                 }
@@ -466,7 +472,7 @@ fun ImportExportScreen(
                     GeekPrimaryButton("导入 CSV", { if (!busy) pickCsv.launch(arrayOf("text/*", "text/csv", "application/csv")) }, Modifier.weight(1f), enabled = !busy)
                     GeekPrimaryButton("导入 XLSX", { if (!busy) pickXlsx.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel")) }, Modifier.weight(1f), enabled = !busy)
                 }
-                GeekGhostButton(if (busy) "处理中…" else "从通讯录导入", color = if (busy) TextMuted else Accent, onClick = {
+                GeekGhostButton(if (busy) "处理中…" else "从通讯录导入", color = if (busy) TextMuted else TextSecondary, onClick = {
                     if (busy) return@GeekGhostButton
                     exportPending = false
                     permLauncher.launch(Manifest.permission.READ_CONTACTS)
@@ -475,35 +481,36 @@ fun ImportExportScreen(
 
             // ================= 导出与模板 =================
             SectionCard("导出与模板", "CSV / XLSX / 系统通讯录 / 模板") {
+                // 规范：区内主操作（导出 CSV/XLSX）用主色填充；辅助操作统一中性描边
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GeekGhostButton("导出 CSV", color = if (busy) TextMuted else Success, onClick = { if (!busy) createCsv.launch("tma_customers.csv") })
-                    GeekGhostButton("导出 XLSX", color = if (busy) TextMuted else Success, onClick = { if (!busy) createXlsx.launch("tma_customers.xlsx") })
+                    GeekPrimaryButton(if (busy) "处理中…" else "导出 CSV", { if (!busy) createCsv.launch("tma_customers.csv") }, Modifier.weight(1f), enabled = !busy)
+                    GeekPrimaryButton(if (busy) "处理中…" else "导出 XLSX", { if (!busy) createXlsx.launch("tma_customers.xlsx") }, Modifier.weight(1f), enabled = !busy)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GeekGhostButton(if (busy) "处理中…" else "导出到通讯录", color = if (busy) TextMuted else Accent, onClick = {
+                    GeekGhostButton(if (busy) "处理中…" else "追加到通讯录", color = if (busy) TextMuted else TextSecondary, onClick = {
                         if (busy) return@GeekGhostButton
                         exportPending = true
-                        groupPending = false
                         permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
                     })
-                    GeekGhostButton("下载导入模板", color = if (busy) TextMuted else Warning, onClick = { if (!busy) createTemplate.launch("tma_template.xlsx") })
+                    GeekGhostButton("下载导入模板", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) createTemplate.launch("tma_template.xlsx") })
                 }
-                // 标签 → 通讯录分组（云端 v2.0：按标签建系统分组，便于圈选群发）
-                GeekGhostButton(if (busy) "处理中…" else "标签 → 通讯录分组", color = if (busy) TextMuted else Accent, onClick = {
-                    if (busy) return@GeekGhostButton
-                    exportPending = false
-                    groupPending = true
-                    permLauncher.launch(Manifest.permission.WRITE_CONTACTS)
-                })
+                Text("「追加到通讯录」= 增量：只新增 App 里有而手机通讯录缺失的联系人，绝不删除手机已有联系人；「覆盖通讯录」= 全量重建（见下方危险操作，覆盖时自动重建标签分组），两者用途不同。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // ================= 危险操作 =================
+            // ================= 危险操作（覆盖类统一：自动备份 → 重建，执行前二次确认） =================
             SectionCard("危险操作", null) {
                 Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                 GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClear = true })
                 Spacer(Modifier.height(6.dp))
-                Text("覆盖通讯录：以 App 内客户为准重写手机通讯录（换机/专用设备用），执行前自动备份到「下载/TMA备份」。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/TMA备份」，确认后不可撤销。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("覆盖通讯录：以 App 内客户为准全量重建手机通讯录，含标签分组（换机/专用设备用）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
                 GeekGhostButton(if (busy) "处理中…" else "覆盖通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwrite = true })
+                Spacer(Modifier.height(6.dp))
+                Text("覆盖短信记录：以云端短信为准重建本地短信记录。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "覆盖短信记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwriteSms = true })
+                Spacer(Modifier.height(6.dp))
+                Text("覆盖通话记录：以云端通话为准重建本地通话记录。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "覆盖通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwriteCalls = true })
             }
 
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
@@ -556,7 +563,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwrite = false },
             title = { Text("覆盖手机通讯录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份到「下载/TMA备份」→ 清空手机通讯录全部联系人 → 以 App 内客户全量重写（含备注字段）。\\n仅建议在新手机或专用设备上使用，覆盖后原通讯录不可恢复！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份到「下载/TMA备份」→ 清空手机通讯录全部联系人（含分组）→ 以 App 内客户全量重写（含备注与标签分组）。\\n仅建议在新手机或专用设备上使用，覆盖后原通讯录不可恢复！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwrite = false; vm.overwriteContacts() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
@@ -564,6 +571,36 @@ fun ImportExportScreen(
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwrite = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    if (confirmOverwriteSms) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmOverwriteSms = false },
+            title = { Text("覆盖本地短信记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
+            text = { Text("执行顺序：自动备份本地短信到「下载/TMA备份」→ 清空本地短信记录 → 以云端短信全量重建（含客户关联）。\n覆盖后本地记录被云端数据替换，原数据见备份文件！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwriteSms = false; vm.overwriteSms() }) {
+                    Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwriteSms = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    if (confirmOverwriteCalls) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmOverwriteCalls = false },
+            title = { Text("覆盖本地通话记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
+            text = { Text("执行顺序：自动备份本地通话到「下载/TMA备份」→ 清空本地通话记录 → 以云端通话全量重建（含客户关联）。\n覆盖后本地记录被云端数据替换，原数据见备份文件！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwriteCalls = false; vm.overwriteCalls() }) {
+                    Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwriteCalls = false }) { Text("取消", color = TextSecondary) }
             }
         )
     }

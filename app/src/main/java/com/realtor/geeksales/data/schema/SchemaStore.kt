@@ -29,7 +29,9 @@ data class FieldDef(
     /** 显示顺序 */
     val order: Int = 0,
     /** true=存 Customer 列；false=存 customer_fields */
-    val builtin: Boolean = true
+    val builtin: Boolean = true,
+    /** true=用户手动添加（跨模板保留）；false=线上模板导入（随模板切换替换） */
+    val local: Boolean = false
 )
 
 /** 模板元数据：分层（tiers）+ 身份标签 + 属性标签（线上模板下发，驱动筛选 chips 与标签选择器） */
@@ -41,7 +43,11 @@ data class TemplateMeta(
     /** 属性标签：学区房 / 地铁房 / 改善型 … */
     val attributeTags: List<String> = emptyList(),
     /** 分层中文语义（模板可覆盖）：S→高价值成交…U→未分类；缺省用通用销售分层语义（行业无关） */
-    val tierLabels: Map<String, String> = DEFAULT_TIER_LABELS
+    val tierLabels: Map<String, String> = DEFAULT_TIER_LABELS,
+    /** 当前生效模板 id（线上 isActive 模板；用于自动跟随切换） */
+    val templateId: String? = null,
+    /** 当前生效模板名（展示用） */
+    val templateName: String? = null
 ) {
     /** 全部模板标签（身份 + 属性，去重保序），供编辑页标签选择器 */
     val allTags: List<String> get() = (identityTags + attributeTags).distinct()
@@ -129,11 +135,11 @@ class SchemaStore @Inject constructor(
         const val KEY_META = "schema_meta_v1"
     }
 
-    /** 默认模板元数据（房产模板；线上模板下发后以线上为准） */
+    /** 默认模板元数据（行业无关：不预设任何行业标签，拉取线上模板后由线上填充） */
     fun defaultMeta(): TemplateMeta = TemplateMeta(
         tiers = listOf("S", "A", "B", "C", "D", "V", "U"),
-        identityTags = listOf("买房客户", "卖房业主", "租客", "业主", "中介同行"),
-        attributeTags = listOf("学区房", "地铁房", "改善型", "刚需", "投资", "首套", "二套")
+        identityTags = emptyList(),
+        attributeTags = emptyList()
     )
 
     /** 当前模板元数据（本地缓存或默认） */
@@ -154,14 +160,16 @@ class SchemaStore @Inject constructor(
             tiers = list(parts[0]).ifEmpty { defaultMeta().tiers },
             identityTags = list(parts[1]),
             attributeTags = list(parts[2]),
-            tierLabels = labels.ifEmpty { TemplateMeta.DEFAULT_TIER_LABELS }
+            tierLabels = labels.ifEmpty { TemplateMeta.DEFAULT_TIER_LABELS },
+            templateId = if (parts.size >= 5) parts[4].takeIf { it.isNotBlank() } else null,
+            templateName = if (parts.size >= 6) parts[5].takeIf { it.isNotBlank() } else null
         )
     }
 
     fun saveMeta(m: TemplateMeta) {
         fun join(l: List<String>) = l.joinToString(",")
         val labels = m.tierLabels.entries.joinToString(",") { "${it.key}:${it.value}" }
-        prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}~$labels").apply()
+        prefs.edit().putString(KEY_META, "${join(m.tiers)}~${join(m.identityTags)}~${join(m.attributeTags)}~$labels~${m.templateId.orEmpty()}~${m.templateName.orEmpty()}").apply()
     }
 
     /** 内置默认模板：通用列（全行业可用）+ 房产模板字段（默认房产模板，购房需求组） */
@@ -188,31 +196,41 @@ class SchemaStore @Inject constructor(
         FieldDef(BuiltinKeys.NOTE, "备注", "textarea", "意向与跟进", order = 22)
     )
 
-    /** 当前生效 schema：本地缓存（含线上合并与自定义）或默认模板 */
+    /** 旧版本写死的内置房产字段（v2.6.3 起不再预设；缓存中残留则自动移除，避免跨行业误导） */
+    private val LEGACY_INTERNAL_KEYS = setOf("areaPref", "budgetMin", "budgetMax", "houseType", "targetProject")
+
+    /** 当前生效 schema：本地缓存（含线上合并与自定义）或默认模板；自动迁移清除旧版写死的行业内置字段 */
     fun current(): List<FieldDef> {
         val cached = prefs.getString(KEY_SCHEMA, null)
         if (cached.isNullOrBlank()) return defaultSchema()
-        return runCatching {
-            val list = parseArray(cached).mapNotNull { el -> runCatching { FieldDefSerializer.fromJson(el) }.getOrNull() }
-            if (list.isEmpty()) defaultSchema() else list
-        }.getOrDefault(defaultSchema())
+        val list = runCatching {
+            parseArray(cached).mapNotNull { el -> runCatching { FieldDefSerializer.fromJson(el) }.getOrNull() }
+        }.getOrElse { emptyList() }
+        if (list.isEmpty()) return defaultSchema()
+        val cleaned = list.filter { !(it.builtin && it.key in LEGACY_INTERNAL_KEYS) }
+        if (cleaned.size != list.size) save(cleaned)  // 迁移：旧房产内置字段移除并落盘
+        return cleaned
     }
 
-    /** 将线上模板合并进当前 schema 并缓存（线上定义为准，保留本地自定义） */
+    /**
+     * 将线上模板合并进当前 schema 并缓存：
+     * - 线上模板字段（扩展列）以线上为准，切换模板时旧模板扩展字段自动移除（不残留行业字段）；
+     * - 仅保留用户手动添加的字段（local=true，跨模板保留）；
+     * - 内置通用字段始终保留。
+     */
     fun mergeRemote(remote: List<FieldDef>): List<FieldDef> {
         val local = current()
-        val localCustom = local.filter { !it.builtin }
         val merged = mergeFields(local, remote)
-        // 保留本地自定义字段（数据页添加的），避免被线上覆盖删除
-        val result = merged + localCustom.filter { lc -> merged.none { it.key == lc.key } }
+        val remoteKeys = remote.map { it.key }.toSet()
+        val result = merged.filter { it.builtin || it.local || it.key in remoteKeys }
         save(result)
         return result
     }
 
-    /** 添加本地自定义字段（数据页），保存并返回新 schema */
+    /** 添加本地自定义字段（数据页），标记 local=true（跨模板保留），保存并返回新 schema */
     fun addLocalField(def: FieldDef): List<FieldDef> {
         val cur = current()
-        val next = cur + def.copy(builtin = false)
+        val next = cur + def.copy(builtin = false, local = true)
         save(next)
         return next
     }
@@ -291,7 +309,7 @@ class SchemaStore @Inject constructor(
 /** FieldDef JSON 序列化（轻量，无 kotlinx 依赖） */
 object FieldDefSerializer {
     fun toJson(f: FieldDef): String {
-        val base = "{\"key\":\"${esc(f.key)}\",\"label\":\"${esc(f.label)}\",\"type\":\"${esc(f.type)}\",\"group\":\"${esc(f.group)}\",\"required\":${f.required},\"order\":${f.order},\"builtin\":${f.builtin}"
+        val base = "{\"key\":\"${esc(f.key)}\",\"label\":\"${esc(f.label)}\",\"type\":\"${esc(f.type)}\",\"group\":\"${esc(f.group)}\",\"required\":${f.required},\"order\":${f.order},\"builtin\":${f.builtin},\"local\":${f.local}"
         if (f.options.isEmpty()) return "$base}"
         val opts = f.options.joinToString(",", prefix = "[", postfix = "]") { "\"${esc(it)}\"" }
         return "$base,\"options\":$opts}"
@@ -320,6 +338,7 @@ object FieldDefSerializer {
             key = str("key"),
             label = str("label"),
             type = str("type").ifBlank { "text" },
+            local = bool("local"),
             group = str("group").ifBlank { "其他" },
             required = bool("required"),
             options = list("options"),

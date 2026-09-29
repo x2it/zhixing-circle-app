@@ -105,10 +105,7 @@ fun CustomerEditScreen(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GeekPrimaryButton("保存并返回", { vm.save() }, Modifier.weight(1f))
-                GeekGhostButton("取消", color = Danger, onClick = onBack)
-            }
+            // 保存统一走顶部「保存」，返回用左上角/系统手势，底部按钮已移除（避免重复操作入口）
             Spacer(Modifier.height(40.dp))
         }
     }
