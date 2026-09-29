@@ -75,7 +75,7 @@ fun CustomerDetailScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) vm.dial(true)
-        else com.realtor.geeksales.ui.components.GlobalToast.showError("未授予「拨打电话」权限：请在 系统设置 → 应用 → TMA → 权限 → 拨打电话 中开启（仅影响「直接拨打」，普通拨号不受影响）")
+        else com.realtor.geeksales.ui.components.GlobalToast.showError("未授予「拨打电话」权限：请在 系统设置 → 应用 → 知行朋友圈 → 权限 → 拨打电话 中开启（仅影响「直接拨打」，普通拨号不受影响）")
     }
     androidx.compose.runtime.LaunchedEffect(id) { vm.setCustomerId(id) }
     // 超时降级：3 秒仍未加载出客户，显示明确错误态而非无限转圈（历史"看似假死"来源之一）

@@ -93,6 +93,8 @@ fun ImportExportScreen(
     var confirmOverwriteCalls by remember { mutableStateOf(false) }
     var confirmClearCloudSms by remember { mutableStateOf(false) }
     var confirmClearCloudCalls by remember { mutableStateOf(false) }
+    var confirmClearCloudContacts by remember { mutableStateOf(false) }
+    var confirmResetSmsSync by remember { mutableStateOf(false) }
     var confirmResetCallSync by remember { mutableStateOf(false) }
     var confirmClearSysSms by remember { mutableStateOf(false) }
     var confirmClearSysCalls by remember { mutableStateOf(false) }
@@ -154,7 +156,7 @@ fun ImportExportScreen(
                 smsAction == 2 -> vm.exportSmsToWorkbuddy()
             }
         } else {
-            GlobalToast.showError("未授予「短信」权限：备份与云端同步无法执行。请在 系统设置 → 应用 → TMA → 权限 → 短信 中开启后重试")
+            GlobalToast.showError("未授予「短信」权限：备份与云端同步无法执行。请在 系统设置 → 应用 → 知行朋友圈 → 权限 → 短信 中开启后重试")
         }
     }
     // 通话动作标记（同步云端=1 / 仅拉取=2），权限授权后执行（通话同步需要读本机通话记录）
@@ -168,7 +170,7 @@ fun ImportExportScreen(
                 callAction == 2 -> vm.pullCallsFromWorkbuddy()
             }
         } else {
-            GlobalToast.showError("未授予「通话记录」权限：云端备份与拉取无法执行。请在 系统设置 → 应用 → TMA → 权限 → 电话/通话记录 中开启后重试")
+            GlobalToast.showError("未授予「通话记录」权限：云端备份与拉取无法执行。请在 系统设置 → 应用 → 知行朋友圈 → 权限 → 电话/通话记录 中开启后重试")
         }
     }
 
@@ -330,7 +332,7 @@ fun ImportExportScreen(
                     GeekPrimaryButton(if (busy) "处理中…" else "同步到云端", { if (!busy) vm.exportToWorkbuddy() }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else Success, onClick = { if (!busy) vm.importFromWorkbuddy() })
                 }
-                Text("执行前自动全量备份到「下载/TMA备份」；拉取不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("执行前自动全量备份到「下载/知行朋友圈备份」；拉取不删除本地数据。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                 Text("⚠ API Key 关联知行朋友圈账号：一人一账号一密钥，请勿共用。", color = Warning, style = MaterialTheme.typography.bodyMedium)
             }
 
@@ -455,7 +457,7 @@ fun ImportExportScreen(
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
                     Spacer(Modifier.weight(1f))
                 }
-                Text("短信属敏感数据：默认仅本地备份（下载/TMA备份）；「同步到云端」仅主动点击时执行。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("短信属敏感数据：默认仅本地备份（下载/知行朋友圈备份）；「同步到云端」仅主动点击时执行。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
             // ================= 通话记录备份与同步 =================
@@ -512,7 +514,7 @@ fun ImportExportScreen(
                 Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                 GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClear = true })
                 Spacer(Modifier.height(6.dp))
-                Text("覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/TMA备份」，确认后不可撤销。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Text("覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/知行朋友圈备份」，确认后不可撤销。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                 Text("覆盖通讯录：以 App 内客户为准全量重建手机通讯录，含标签分组（换机/专用设备用）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
                 GeekGhostButton(if (busy) "处理中…" else "覆盖通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwrite = true })
                 Spacer(Modifier.height(6.dp))
@@ -527,12 +529,18 @@ fun ImportExportScreen(
                 Spacer(Modifier.height(6.dp))
                 GeekGhostButton(if (busy) "处理中…" else "清空云端通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudCalls = true })
                 Spacer(Modifier.height(6.dp))
+                Text("清空云端通讯录：删除云端全部联系人（本地与手机通讯录不受影响）。清空后「覆盖通讯录」会以 App 内客户重建云端；或点「同步到云端」重传。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "清空云端通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudContacts = true })
+                Spacer(Modifier.height(6.dp))
+                Text("重置短信同步状态：短信同步读手机系统短信库；若系统短信被清空/恢复后游标异常、或怀疑漏推，重置后下次同步全量对账（服务端幂等，不会重复）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "重置短信同步状态", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmResetSmsSync = true })
+                Spacer(Modifier.height(6.dp))
                 Text("重置通话同步状态：云端通话被删除/清空后，想全量重新备份时用。清空本地上传标记，本地记录保留；重传时服务端幂等跳过已存在项，不会重复。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
                 GeekGhostButton(if (busy) "处理中…" else "重置通话同步状态", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmResetCallSync = true })
             }
 
             // ================= 清空手机系统数据（删除系统库本身，不可恢复；强确认=输入「清空」） =================
-            SectionCard("清空手机系统数据", "直接删除手机系统自带的短信 / 通话 / 通讯录（不是 App 数据、不是云端）。每个操作前自动备份到「下载/TMA备份」，并需输入「清空」二字确认，防止误操作。") {
+            SectionCard("清空手机系统数据", "直接删除手机系统自带的短信 / 通话 / 通讯录（不是 App 数据、不是云端）。每个操作前自动备份到「下载/知行朋友圈备份」，并需输入「清空」二字确认，防止误操作。") {
                 Text("清空系统短信：删除手机系统短信库全部短信（需「修改短信」权限）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
                 GeekGhostButton(if (busy) "处理中…" else "清空系统短信", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysSms = true })
                 Spacer(Modifier.height(6.dp))
@@ -593,7 +601,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwrite = false },
             title = { Text("覆盖手机通讯录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份到「下载/TMA备份」→ 清空手机通讯录全部联系人（含分组）→ 以 App 内客户全量重写（含备注与标签分组）。\\n仅建议在新手机或专用设备上使用，覆盖后原通讯录不可恢复！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份到「下载/知行朋友圈备份」→ 清空手机通讯录全部联系人（含分组）→ 以 App 内客户全量重写（含备注与标签分组）。\\n仅建议在新手机或专用设备上使用，覆盖后原通讯录不可恢复！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwrite = false; vm.overwriteContacts() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
@@ -608,7 +616,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwriteSms = false },
             title = { Text("覆盖本地短信记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份本地短信到「下载/TMA备份」→ 清空本地短信记录 → 以云端短信全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份本地短信到「下载/知行朋友圈备份」→ 清空本地短信记录 → 以云端短信全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwriteSms = false; vm.overwriteSms() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
@@ -623,7 +631,7 @@ fun ImportExportScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmOverwriteCalls = false },
             title = { Text("覆盖本地通话记录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
-            text = { Text("执行顺序：自动备份本地通话到「下载/TMA备份」→ 清空本地通话记录 → 以云端通话全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            text = { Text("执行顺序：自动备份本地通话到「下载/知行朋友圈备份」→ 清空本地通话记录 → 以云端通话全量重建（含客户关联）。\n可重复执行（无次数限制），每次都以当前云端数据重建；云端为空时会中止并保留本地，不会清空。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmOverwriteCalls = false; vm.overwriteCalls() }) {
                     Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
@@ -660,6 +668,32 @@ fun ImportExportScreen(
             }
         )
     }
+    if (confirmClearCloudContacts) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClearCloudContacts = false },
+            title = { Text("清空云端通讯录？", color = TextPrimary) },
+            text = { Text("将删除云端全部联系人（本地客户与手机通讯录不受影响）。之后可点「同步到云端」重传，或「覆盖通讯录」以 App 内客户重建云端。此操作不可恢复。", color = TextSecondary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmClearCloudContacts = false; vm.clearCloudContacts() }) {
+                    Text("确认清空", color = Danger)
+                }
+                androidx.compose.material3.TextButton(onClick = { confirmClearCloudContacts = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    if (confirmResetSmsSync) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmResetSmsSync = false },
+            title = { Text("重置短信同步状态？", color = TextPrimary) },
+            text = { Text("将清空短信增量游标，下次「同步到云端」全量对账本机系统短信：云端已有的自动跳过（幂等），新短信全部补传。本地短信数据不受影响。", color = TextSecondary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmResetSmsSync = false; vm.resetSmsSyncState() }) {
+                    Text("确认重置", color = Danger)
+                }
+                androidx.compose.material3.TextButton(onClick = { confirmResetSmsSync = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
     if (confirmResetCallSync) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmResetCallSync = false },
@@ -676,9 +710,9 @@ fun ImportExportScreen(
     // 清空手机系统数据：强确认（输入「清空」二字才可执行），防误操作
     if (confirmClearSysSms || confirmClearSysCalls || confirmClearSysContacts) {
         val (sysTitle, sysDesc) = when {
-            confirmClearSysSms -> "清空手机系统短信？" to "将直接删除手机系统短信库中的全部短信（不是 App 数据、不是云端）。执行前自动备份到「下载/TMA备份」。此操作不可恢复，请谨慎。"
-            confirmClearSysCalls -> "清空手机系统通话记录？" to "将直接删除手机系统通话记录中的全部条目（不是 App 数据、不是云端）。执行前自动备份到「下载/TMA备份」。此操作不可恢复，请谨慎。"
-            else -> "清空手机系统通讯录？" to "将直接删除手机系统通讯录中的全部联系人（不是 App 数据、不是云端）。执行前自动备份客户 XLSX 到「下载/TMA备份」。此操作不可恢复，请谨慎。"
+            confirmClearSysSms -> "清空手机系统短信？" to "将直接删除手机系统短信库中的全部短信（不是 App 数据、不是云端）。执行前自动备份到「下载/知行朋友圈备份」。此操作不可恢复，请谨慎。"
+            confirmClearSysCalls -> "清空手机系统通话记录？" to "将直接删除手机系统通话记录中的全部条目（不是 App 数据、不是云端）。执行前自动备份到「下载/知行朋友圈备份」。此操作不可恢复，请谨慎。"
+            else -> "清空手机系统通讯录？" to "将直接删除手机系统通讯录中的全部联系人（不是 App 数据、不是云端）。执行前自动备份客户 XLSX 到「下载/知行朋友圈备份」。此操作不可恢复，请谨慎。"
         }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmClearSysSms = false; confirmClearSysCalls = false; confirmClearSysContacts = false; clearSysCode = "" },
