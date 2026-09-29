@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -166,11 +167,26 @@ fun CustomerListScreen(
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ToggleChip("待跟进过期", onlyOverdue, Warning) { onlyOverdue = !onlyOverdue }
-                ToggleChip("仅拨号队列", onlyQueued, Success) { onlyQueued = !onlyQueued }
-                ToggleChip("今日已拨打", onlyCalledToday, Accent) { onlyCalledToday = !onlyCalledToday }
-                ToggleChip("未拨打", onlyNotCalled, TextMuted) { onlyNotCalled = !onlyNotCalled }
+            // 状态筛选：插槽式定义（id/文案/色/状态-切换映射），UI 通用渲染为两列等高 chip；
+            // 新增/删减筛选维度只需改 statusFilterSlots，布局与样式自动适配
+            val statusFilterSlots = listOf(
+                StatusFilterSlot("overdue", "待跟进", Warning, onlyOverdue) { onlyOverdue = !onlyOverdue },
+                StatusFilterSlot("queued", "拨号队列", Success, onlyQueued) { onlyQueued = !onlyQueued },
+                StatusFilterSlot("calledToday", "今日已拨", Accent, onlyCalledToday) { onlyCalledToday = !onlyCalledToday },
+                StatusFilterSlot("notCalled", "未拨打", TextMuted, onlyNotCalled) { onlyNotCalled = !onlyNotCalled }
+            )
+            statusFilterSlots.chunked(2).forEach { rowSlots ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rowSlots.forEach { slot ->
+                        ToggleChip(
+                            text = slot.label,
+                            on = slot.on,
+                            color = slot.color,
+                            modifier = Modifier.weight(1f),
+                            onClick = slot.onToggle
+                        )
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 GeekGhostButton("导出筛选", color = Accent, onClick = { onNav(Routes.IMPORT_EXPORT) })
@@ -296,13 +312,25 @@ private fun LevelFilterChip(code: String, lvl: IntentLevel, current: IntentLevel
     GeekChip(text = code, color = c, onClick = { onClick(lvl) })
 }
 
+private data class StatusFilterSlot(
+    val id: String,
+    val label: String,
+    val color: Color,
+    val on: Boolean,
+    val onToggle: () -> Unit
+)
+
 @Composable
-private fun ToggleChip(text: String, on: Boolean, color: Color, onClick: () -> Unit) {
+private fun ToggleChip(text: String, on: Boolean, color: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val bg = if (on) color.copy(alpha = 0.2f) else BgElev2
     val border = if (on) color else Divider
-    Row(Modifier.background(bg).border(1.dp, border).clickable { onClick() }.padding(horizontal = 10.dp, vertical = 6.dp)) {
+    Row(
+        modifier.background(bg).border(1.dp, border).clickable { onClick() }
+            .heightIn(min = 32.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(if (on) "✓ " else "○ ", color = color, style = MaterialTheme.typography.labelMedium)
-        Text(text, color = if (on) color else TextSecondary, style = MaterialTheme.typography.labelMedium)
+        Text(text, color = if (on) color else TextSecondary, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }
 

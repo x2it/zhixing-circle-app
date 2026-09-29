@@ -47,6 +47,25 @@ object Formatter {
     fun addDays(anchor: Long, days: Int): Long = anchor + days * 86400_000L
     fun addHours(anchor: Long, hours: Int): Long = anchor + hours * 3600_000L
 
+    /**
+     * 兼容解析云端时间 → EpochMillis：
+     * 13 位毫秒时间戳 / 10 位秒级时间戳 / "yyyy-MM-dd HH:mm" / ISO8601；失败返回 null。
+     * v2.7.2：云端按毫秒时间戳存取，App 上传与回写统一用真实毫秒，不再用分钟精度字符串。
+     */
+    fun parseEpoch(s: String?): Long? {
+        if (s.isNullOrBlank()) return null
+        val t = s.trim()
+        if (t.all { it.isDigit() }) {
+            return runCatching { val n = t.toLong(); if (t.length >= 13) n else n * 1000L }.getOrNull()
+        }
+        return runCatching { sdfFull.get().parse(t)?.time }.getOrNull()
+            ?: runCatching { java.time.OffsetDateTime.parse(t).toInstant().toEpochMilli() }.getOrNull()
+    }
+
+    /** EpochMillis → "yyyy-MM-dd HH:mm"（本地去重 key 用，兼容新旧数据）；失败 null */
+    fun epochToMinute(ms: Long?): String? =
+        ms?.let { if (it <= 0) null else runCatching { sdfFull.get().format(Date(it)) }.getOrNull() }
+
     /** "yyyy-MM-dd" → EpochMillis（知行朋友圈日期格式）；解析失败返回 null */
     fun dayToEpoch(s: String?): Long? {
         if (s.isNullOrBlank()) return null

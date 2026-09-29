@@ -1334,7 +1334,7 @@ class ImportExportViewModel @Inject constructor(
                     phone = m.phone,
                     body = m.body,
                     direction = m.direction,
-                    messageDate = Formatter.dayToEpoch(m.messageDate?.take(10)) ?: System.currentTimeMillis(),
+                    messageDate = Formatter.parseEpoch(m.messageDate) ?: System.currentTimeMillis(),
                     wbMessageId = m.id
                 )
             }
@@ -1394,7 +1394,7 @@ class ImportExportViewModel @Inject constructor(
                     phone = wb.phone,
                     direction = wb.direction,
                     duration = wb.duration,
-                    callDate = Formatter.dayToEpoch(wb.callDate?.take(10)) ?: System.currentTimeMillis(),
+                    callDate = Formatter.parseEpoch(wb.callDate) ?: System.currentTimeMillis(),
                     note = wb.note,
                     wbCallId = wb.id
                 )
@@ -1443,11 +1443,11 @@ class ImportExportViewModel @Inject constructor(
                     }
                 }
             }
-            // 远端消息 key 集合（phone|body|messageDate），避免重复推送
+            // 远端消息 key 集合（phone|body|分钟归一化时间），避免重复推送（兼容新旧格式）
             val remoteKeys = HashSet<String>()
             when (val r = wbApi.fetchAllMessages()) {
                 is WbResult.Success -> r.data.forEach {
-                    remoteKeys.add("${it.phone}|${it.body}|${it.messageDate}")
+                    remoteKeys.add("${it.phone}|${it.body}|${Formatter.epochToMinute(Formatter.parseEpoch(it.messageDate))}")
                 }
                 is WbResult.Error -> {
                     // 线上接口未开放时给出明确指引
@@ -1487,9 +1487,10 @@ class ImportExportViewModel @Inject constructor(
                         val dateMs = c.getLong(dateI)
                         val type = c.getInt(typeI)
                         if (phone.isBlank() || body.isBlank()) continue
-                        val dateLabel = runCatching { sdfMin.format(Date(dateMs)) }.getOrNull()
-                        if (dateLabel == null) continue
-                        val key = "$phone|$body|$dateLabel"
+                        // v2.7.2：传系统库真实毫秒时间戳（非备份时刻），云端按时间戳归一化存取
+                        val dateMsStr = dateMs.toString()
+                        val minuteKey = Formatter.epochToMinute(dateMs) ?: continue
+                        val key = "$phone|$body|$minuteKey"
                         if (key in remoteKeys) continue
                         toPush.add(
                             id to WbMessage(
@@ -1497,7 +1498,7 @@ class ImportExportViewModel @Inject constructor(
                                 phone = phone,
                                 body = body,
                                 direction = if (type == 1) "in" else "out",
-                                messageDate = dateLabel
+                                messageDate = dateMsStr
                             )
                         )
                         remoteKeys.add(key)
@@ -1625,7 +1626,7 @@ class ImportExportViewModel @Inject constructor(
                     phone = m.phone,
                     body = m.body,
                     direction = m.direction,
-                    messageDate = Formatter.dayToEpoch(m.messageDate?.take(10))
+                    messageDate = Formatter.parseEpoch(m.messageDate)
                         ?: System.currentTimeMillis(),
                     wbMessageId = m.id
                 )
@@ -1716,7 +1717,8 @@ class ImportExportViewModel @Inject constructor(
                         phone = c.phone,
                         direction = c.direction,
                         duration = c.duration,
-                        callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
+                        // v2.7.2：传系统库真实毫秒时间戳（镜像自 CallLog.DATE，非备份时刻）
+                        callDate = c.callDate.toString(),
                         note = c.note
                     )
                 }
@@ -1748,7 +1750,7 @@ class ImportExportViewModel @Inject constructor(
                                 phone = wb.phone,
                                 direction = wb.direction,
                                 duration = wb.duration,
-                                callDate = Formatter.dayToEpoch(wb.callDate?.take(10))
+                                callDate = Formatter.parseEpoch(wb.callDate)
                                     ?: System.currentTimeMillis(),
                                 note = wb.note,
                                 wbCallId = wb.id
@@ -1815,7 +1817,7 @@ class ImportExportViewModel @Inject constructor(
                                 phone = wb.phone,
                                 direction = wb.direction,
                                 duration = wb.duration,
-                                callDate = Formatter.dayToEpoch(wb.callDate?.take(10))
+                                callDate = Formatter.parseEpoch(wb.callDate)
                                     ?: System.currentTimeMillis(),
                                 note = wb.note,
                                 wbCallId = wb.id

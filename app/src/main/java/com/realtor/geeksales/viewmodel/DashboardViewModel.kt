@@ -21,9 +21,18 @@ class DashboardViewModel @Inject constructor(
     private val repo: CustomerRepository,
     private val schemaStore: com.realtor.geeksales.data.schema.SchemaStore
 ) : ViewModel() {
-    /** 模板分层（行业可换，驱动分层分布与语义文案） */
-    val templateMeta: StateFlow<com.realtor.geeksales.data.schema.TemplateMeta> =
-        kotlinx.coroutines.flow.MutableStateFlow(schemaStore.meta())
+    /** 模板分层（行业可换，驱动分层分布与语义文案）：轮询跟随 SchemaStore，
+     *  换模板后（数据页自动应用模板）返回工作台，分层分布与语义自动更新，无需重启 */
+    val templateMeta: StateFlow<com.realtor.geeksales.data.schema.TemplateMeta> = flow {
+        while (true) {
+            emit(schemaStore.meta())
+            delay(REFRESH_MS)
+        }
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        schemaStore.meta()
+    )
 
     val totalCustomers: StateFlow<Int> = repo.observeCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
