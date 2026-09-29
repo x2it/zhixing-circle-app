@@ -78,6 +78,9 @@ fun ImportExportScreen(
     }
     var exportPending by remember { mutableStateOf(false) }
     var groupPending by remember { mutableStateOf(false) }
+    // 危险操作二次确认
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmOverwrite by remember { mutableStateOf(false) }
     // API Key 输入状态
     var apiKeyInput by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -497,7 +500,10 @@ fun ImportExportScreen(
             // ================= 危险操作 =================
             SectionCard("危险操作", null) {
                 Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) vm.clearAll() })
+                GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClear = true })
+                Spacer(Modifier.height(6.dp))
+                Text("覆盖通讯录：以 App 内客户为准重写手机通讯录（换机/专用设备用），执行前自动备份到「下载/TMA备份」。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                GeekGhostButton(if (busy) "处理中…" else "覆盖通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwrite = true })
             }
 
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
@@ -534,6 +540,38 @@ fun ImportExportScreen(
             }
             Spacer(Modifier.height(80.dp))
         }
+    }
+
+    // 危险操作二次确认（避免误触不可逆操作）
+    if (confirmClear) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空全部客户数据？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
+            text = { Text("将删除 App 内全部客户/跟进/标签数据，不可恢复。建议先「导出与模板」备份一份。", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmClear = false; vm.clearAll() }) {
+                    Text("确认清空", color = Danger, style = MaterialTheme.typography.labelLarge)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmClear = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    if (confirmOverwrite) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmOverwrite = false },
+            title = { Text("覆盖手机通讯录？", color = TextPrimary, style = MaterialTheme.typography.titleMedium) },
+            text = { Text("执行顺序：自动备份到「下载/TMA备份」→ 清空手机通讯录全部联系人 → 以 App 内客户全量重写（含备注字段）。\\n仅建议在新手机或专用设备上使用，覆盖后原通讯录不可恢复！", color = TextSecondary, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwrite = false; vm.overwriteContacts() }) {
+                    Text("备份并覆盖", color = Danger, style = MaterialTheme.typography.labelLarge)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmOverwrite = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
     }
 }
 

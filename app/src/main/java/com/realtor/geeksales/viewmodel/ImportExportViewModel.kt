@@ -266,125 +266,199 @@ class ImportExportViewModel @Inject constructor(
                 _status.value = IOStatus(message = "通讯录已有全部客户，无需重复导出", exportCount = 0)
                 return@withContext
             }
+            // 分批写入（OPPO/ColorOS 大批量一次 applyBatch 易超时，100 条/批 + 进度 + 可取消）
             val ops = ArrayList<ContentProviderOperation>()
-            toExport.forEach { c ->
-                val rowId = ops.size
-                ops.add(
-                    ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
-                        .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null)
-                        .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null)
-                        .withValue(ContactsContract.RawContacts.STARRED, 0)
-                        .build()
-                )
-                ops.add(
-                    ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                        .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                        .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
-                        .withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, c.name)
-                        .build()
-                )
-                // 手机（主）+ 备用电话
-                ops.add(
-                    ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                        .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                        .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-                        .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, c.phone)
-                        .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
-                        .build()
-                )
-                if (!c.phone2.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, c.phone2)
-                            .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_HOME)
-                            .build()
+            toExport.forEach { c -> ops.addAll(buildContactOps(c)) }
+            if (ops.isNotEmpty()) {
+                val totalOps = ops.size
+                ops.chunked(100).forEachIndexed { i, batch ->
+                    if (runningJob?.isCancelled == true) throw java.util.concurrent.CancellationException("已取消")
+                    ctx.contentResolver.applyBatch(ContactsContract.AUTHORITY, ArrayList(batch))
+                    val done = ((i + 1) * 100).coerceAtMost(totalOps)
+                    progress(
+                        0.3f + 0.6f * (i + 1) / kotlin.math.ceil(totalOps / 100.0).toInt().coerceAtLeast(1),
+                        "写入通讯录 $done/$totalOps…"
                     )
-                }
-                // 邮箱
-                if (!c.email.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, c.email)
-                            .withValue(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_HOME)
-                            .build()
-                    )
-                }
-                // 公司 + 职位
-                if (!c.company.isNullOrBlank() || !c.jobTitle.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Organization.COMPANY, c.company.orEmpty())
-                            .withValue(ContactsContract.CommonDataKinds.Organization.TITLE, c.jobTitle.orEmpty())
-                            .build()
-                    )
-                }
-                // 地址
-                if (!c.address.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.StructuredPostal.FORMATTED_ADDRESS, c.address)
-                            .withValue(ContactsContract.CommonDataKinds.StructuredPostal.TYPE, ContactsContract.CommonDataKinds.StructuredPostal.TYPE_HOME)
-                            .build()
-                    )
-                }
-                // 昵称
-                if (!c.nickname.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Nickname.NAME, c.nickname)
-                            .build()
-                    )
-                }
-                // 网站
-                if (!c.website.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Website.URL, c.website)
-                            .build()
-                    )
-                }
-                // 生日（Event.TYPE_BIRTHDAY）
-                if (!c.birthday.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Event.START_DATE, c.birthday)
-                            .withValue(ContactsContract.CommonDataKinds.Event.TYPE, ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY)
-                            .build()
-                    )
-                }
-                // 即时消息（微信，自定义协议）
-                if (!c.im.isNullOrBlank()) {
-                    ops.add(
-                        ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
-                            .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
-                            .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE)
-                            .withValue(ContactsContract.CommonDataKinds.Im.DATA1, c.im)
-                            .withValue(ContactsContract.CommonDataKinds.Im.PROTOCOL, ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM)
-                            .withValue(ContactsContract.CommonDataKinds.Im.CUSTOM_PROTOCOL, "微信")
-                            .build()
-                    )
+                    kotlinx.coroutines.yield()
                 }
             }
-            ctx.contentResolver.applyBatch(ContactsContract.AUTHORITY, ops)
             _status.value = IOStatus(
                 message = "导出到通讯录完成（跳过已有号码 ${all.size - toExport.size} 条）",
                 exportCount = toExport.size
             )
         }
+    }
+
+    /**
+     * 覆盖通讯录（换机/专用设备场景）：先自动全量备份 → 清空系统通讯录 → 全量写入本地客户（含全部字段与备注）。
+     * UI 侧必须二次确认后才调用；备份文件在「下载/TMA备份」。
+     */
+    fun overwriteContacts() = doRun("覆盖通讯录中…") {
+        withContext(Dispatchers.IO) {
+            val all = repo.getAll()
+            if (all.isEmpty()) {
+                _status.value = IOStatus(message = "无客户可写入通讯录")
+                return@withContext
+            }
+            // 1) 自动备份（双保险：清空前先落一份 XLSX 到下载/TMA备份）
+            progress(0.05f, "覆盖前自动备份…")
+            val backup = backupToDownloads()
+            if (backup == null) {
+                _status.value = IOStatus(message = "备份失败，已中止覆盖", isError = true)
+                return@withContext
+            }
+            // 2) 清空系统通讯录全部联系人
+            progress(0.2f, "清空系统通讯录…")
+            if (runningJob?.isCancelled == true) throw java.util.concurrent.CancellationException("已取消")
+            ctx.contentResolver.delete(ContactsContract.RawContacts.CONTENT_URI, null, null)
+            // 3) 全量写入（分批 + 进度 + 可取消）
+            val ops = ArrayList<ContentProviderOperation>()
+            all.forEach { c -> ops.addAll(buildContactOps(c)) }
+            val totalOps = ops.size
+            ops.chunked(100).forEachIndexed { i, batch ->
+                if (runningJob?.isCancelled == true) throw java.util.concurrent.CancellationException("已取消")
+                ctx.contentResolver.applyBatch(ContactsContract.AUTHORITY, ArrayList(batch))
+                val done = ((i + 1) * 100).coerceAtMost(totalOps)
+                progress(
+                    0.25f + 0.7f * (i + 1) / kotlin.math.ceil(totalOps / 100.0).toInt().coerceAtLeast(1),
+                    "写入通讯录 $done/$totalOps…"
+                )
+                kotlinx.coroutines.yield()
+            }
+            _status.value = IOStatus(
+                message = "覆盖通讯录完成：${all.size} 条（备份：$backup）",
+                exportCount = all.size
+            )
+        }
+    }
+
+    /** 单个客户 → 系统通讯录操作列表（姓名/手机/备用/邮箱/公司职位/地址/昵称/网站/生日/微信/备注） */
+    private fun buildContactOps(c: Customer): List<ContentProviderOperation> {
+        val ops = ArrayList<ContentProviderOperation>()
+        val rowId = ops.size
+        ops.add(
+            ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
+                .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null)
+                .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null)
+                .withValue(ContactsContract.RawContacts.STARRED, 0)
+                .build()
+        )
+        ops.add(
+            ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+                .withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, c.name)
+                .build()
+        )
+        // 手机（主）
+        if (!c.phone.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, c.phone)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
+                    .build()
+            )
+        }
+        // 备用电话
+        if (!c.phone2.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, c.phone2)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_HOME)
+                    .build()
+            )
+        }
+        // 邮箱
+        if (!c.email.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, c.email)
+                    .withValue(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_HOME)
+                    .build()
+            )
+        }
+        // 公司 + 职位
+        if (!c.company.isNullOrBlank() || !c.jobTitle.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Organization.COMPANY, c.company.orEmpty())
+                    .withValue(ContactsContract.CommonDataKinds.Organization.TITLE, c.jobTitle.orEmpty())
+                    .build()
+            )
+        }
+        // 地址
+        if (!c.address.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.StructuredPostal.FORMATTED_ADDRESS, c.address)
+                    .withValue(ContactsContract.CommonDataKinds.StructuredPostal.TYPE, ContactsContract.CommonDataKinds.StructuredPostal.TYPE_HOME)
+                    .build()
+            )
+        }
+        // 昵称
+        if (!c.nickname.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Nickname.NAME, c.nickname)
+                    .build()
+            )
+        }
+        // 网站
+        if (!c.website.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Website.URL, c.website)
+                    .build()
+            )
+        }
+        // 生日（Event.TYPE_BIRTHDAY）
+        if (!c.birthday.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Event.START_DATE, c.birthday)
+                    .withValue(ContactsContract.CommonDataKinds.Event.TYPE, ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY)
+                    .build()
+            )
+        }
+        // 即时消息（微信，自定义协议）
+        if (!c.im.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Im.DATA1, c.im)
+                    .withValue(ContactsContract.CommonDataKinds.Im.PROTOCOL, ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM)
+                    .withValue(ContactsContract.CommonDataKinds.Im.CUSTOM_PROTOCOL, "微信")
+                    .build()
+            )
+        }
+        // 字段备注（用户编辑/导入的备注 → 系统联系人备注）
+        if (!c.note.isNullOrBlank()) {
+            ops.add(
+                ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, rowId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.Note.NOTE, c.note.trim())
+                    .build()
+            )
+        }
+        return ops
     }
 
     /**
@@ -931,7 +1005,6 @@ class ImportExportViewModel @Inject constructor(
             var updated = 0
             var skipped = 0
             var failed = 0
-            var noPhone = 0
             var lastErrCode: Int? = null
             var lastErrMsg: String? = null
             val localAll = repo.getAll()
@@ -939,14 +1012,12 @@ class ImportExportViewModel @Inject constructor(
             val toUpdate = mutableListOf<Triple<Customer, com.realtor.geeksales.data.remote.WbContact, String>>()
             localAll.forEach { c ->
                 val phoneN = c.phoneNormalized
-                if (phoneN.isBlank() || !Formatter.isValidCnPhone(phoneN)) {
-                    noPhone++
-                    return@forEach
-                }
+                // 号码类型全放开：手机 / 座机(带区号) / 400 / 95xxx 银行客服 / 110·120·112 紧急号码 / 邮箱标识 / 无号码
+                // 线上不校验号码格式（实测任意字符串可存），一律上传；重复防护走 externalId 幂等 + 服务端去重
                 val tagIds = repo.tagsOf(c.id).mapNotNull { tagIdByName[it] }
                 val ext = repo.extFieldsOf(c.id)
                 val wb = customerToWb(c, tagIds, ext)
-                val remote = remoteByPhone[phoneN]
+                val remote = if (phoneN.isNotBlank()) remoteByPhone[phoneN] else null
                 when {
                     remote != null -> {
                         when (mode) {
@@ -1088,7 +1159,7 @@ class ImportExportViewModel @Inject constructor(
                 isError = hasFail,
                 syncSummary = listOfNotNull(
                     batchWarn.takeIf { it.isNotEmpty() },
-                    "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（无号码跳过 $noPhone）",
+                    "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（含无号码与特殊号码联系人，均按原样上传）",
                     "跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}",
                     "备份：$backup",
                     if (hasFail) {
@@ -1720,6 +1791,11 @@ class ImportExportViewModel @Inject constructor(
         }
         if (budget.isNotBlank()) items.add("预算：${budget}万")
         if (!c.houseType.isNullOrBlank()) items.add("房型：${c.houseType}")
+        if (!c.phone2.isNullOrBlank()) items.add("备用电话：${c.phone2}")
+        if (!c.email.isNullOrBlank()) items.add("邮箱：${c.email}")
+        if (!c.company.isNullOrBlank()) items.add("公司：${c.company}")
+        if (!c.jobTitle.isNullOrBlank()) items.add("职位：${c.jobTitle}")
+        if (!c.address.isNullOrBlank()) items.add("地址：${c.address}")
         val merged = items.joinToString("；")
         val note = c.note?.trim().orEmpty()
         return if (merged.isNotEmpty() && note.isNotEmpty()) "$merged；$note"
