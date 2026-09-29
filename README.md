@@ -1,157 +1,96 @@
-﻿# TMA · 电话营销助理
+# 知行朋友圈 · Android 端（zhixing-circle-app）
 
 > **Only the next call.** — 专注下一通电话，其余交给系统。
 >
-> Android 原生电销助手，半自动拨号 + 通话后跟进登记 + 客户档案管理。
+> 「知行朋友圈」服务端的 Android 客户端：客户分层管理 + 半自动拨号跟进 + 通讯录/短信/通话双向云端备份。
 
 ---
 
 ## 概述
 
-TMA 是一款面向房产经纪人/电话销售人员的 Android 应用。核心理念：**用最少的操作完成"拨号 → 登记 → 下一位"循环**。
+知行朋友圈是一款**可跨行业适配**的客户关系管理 App（Kotlin + Compose + Room + Hilt）。核心理念：**用最少的操作完成"拨号 → 登记 → 下一位"循环**，同时把通讯录、短信、通话记录安全地双向同步到云端。
 
-- 数据全部存储在本地（Room/SQLite），不上传任何服务器
+- **模块化 / 插槽式设计**：分层、字段、筛选维度均由线上模板下发驱动，换行业（房产 / 保险 / 电商 / 社交 / 教育 / 本地服务）自动适配，不硬编码
 - 不使用无障碍服务，不自动拨/挂机，不提供机器人外呼
-- 遵循奥卡姆剃刀原则：界面无冗余元素，功能必须真实可用
+- 覆盖/清空类危险操作：自动备份 + 二次确认（系统数据需输入"清空"强确认），可重复执行
+
+## 服务端
+
+- 服务端仓库：[x2it/zhixing-circle](https://github.com/x2it/zhixing-circle)（NestJS + React + PostgreSQL）
+- App 通过 `?api_key=` 接入服务端，双向同步客户 / 跟进 / 标签 / 短信 / 通话记录
 
 ## 功能
 
 ### 工作台
-客户总数、今日已拨打/未拨打、过期跟进、今日跟进统计、意向分布图。
+客户总数、今日已拨打/未拨打、过期跟进、今日跟进统计、分层分布（跟随线上模板语义）。
 
 ### 客户名单
-搜索（姓名/电话/楼盘/区域）、筛选（意向等级/待跟进/队列/今日已拨打/未拨打）、新建/编辑/删除、一键批量入队。
+搜索、分层筛选（S/A/B/C/D/V，模板驱动）、状态筛选（待跟进 / 拨号队列 / 今日已拨 / 未拨打，插槽式可扩展）、新建/编辑/删除、批量入队/批量分层。
 
 ### 拨号队列
-按顺序拨打，支持单条入队/出队、批量入队、清空。队列编号自动重排，永不跳号。
+按顺序拨打，支持单条入队/出队、批量入队、清空。队列编号自动重排。
 
 ### 半自动拨号 + 跟进登记
 - ACTION_DIAL 跳系统拨号盘（默认），可选 ACTION_CALL 直接拨打
 - PhoneStateListener 监听通话状态，挂断后自动弹出跟进登记
-- 登记结果（已接通/未接通/已约看/已拒绝/空错号/关停机/待跟进）
-- 自动更新意向等级和下次跟进时间
+- 自动更新分层和下次跟进时间
 
-### 数据导入导出
-- CSV / XLSX 导入（手机号自动去重，无效号码报告）
-- CSV / XLSX 导出（全部或筛选结果）
-- 通讯录导入/导出
-- 导入模板下载（含中文字段表头 + 示例数据）
+### 双向同步（知行朋友圈）
+- 通讯录 / 短信 / 通话记录：云端 ↔ 本地 ↔ 手机系统，全量 + 增量
+- **真实时间戳**：短信/通话上传传系统库原始毫秒时间戳，云端日期与真实收发时间一致
+- **分片上传**：start → chunk(≤100/片) → commit，绕开网关 1MB 请求体上限
+- **幂等重试**：服务端按业务键去重（短信 号码+时间+内容、通话 号码+时间+方向+时长、联系人 externalId），重推不产生重复
+- 设备握手（v2.7.3）：启动上报设备与环境，云端下发限制与能力开关，同步前自查
 
-### 合规
-首次启动需确认合规声明。明确禁止违规/骚扰使用。
+### 模板体系
+- 6 个行业预设模板 + 自定义模板，`isActive` 标识当前使用，App 自动跟随
+- 分层 value 恒为 S/A/B/C/D/V（逻辑判断用），label/description 为行业语义（展示用）
+- 另存为新方案 / 单方案重置 / 恢复出厂（服务端能力）
+
+### 数据安全（防误操作设计）
+- 覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/TMA备份」，云端为空自动中止并保留本地
+- 覆盖通讯录自动重建标签分组；追加到通讯录 = 纯增量不写分组
+- 清空云端短信/通话记录：一键移除云端存量（旧版备份日期错误的处置路径）
+- 重置通话同步状态：云端清空后全量重传（服务端幂等）
+- 清空手机系统短信/通话/通讯录：直接删除系统库，自动备份 + 输入"清空"强确认
+- 时光机快照：客户/跟进/标签/短信全量 XLSX，可恢复
 
 ## 技术栈
 
-| 模块 | 技术 |
-|---|---|
-| UI | Jetpack Compose + Material 3（扁平暗色主题） |
-| 架构 | MVVM + Hilt + Coroutines + Flow |
-| 存储 | Room (SQLite)，TypeConverters |
-| 导航 | Navigation Compose 2.8.1 |
-| 电话 | ACTION_DIAL / PhoneStateListener |
-| 数据格式 | OpenCSV + Apache POI（XLSX 导入）/ 纯 Kotlin XlsxWriter（XLSX 导出/模板） |
-| 最低系统 | Android 12 (API 31) |
-| 目标系统 | Android 15 (API 35) |
-
-## 快速开始
-
-### 环境要求
-- Android Studio Hedgehog 或更新
-- JDK 17
-- Android SDK Platform 35
-
-### 构建步骤
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/<your-org>/x2it.git
-cd x2it
-
-# 2. 配置 SDK 路径
-cp local.properties.example local.properties
-# 编辑 local.properties，填入你的 SDK 路径：
-# sdk.dir=C\:\\Users\\<YOU>\\AppData\\Local\\Android\\Sdk
-
-# 3. 构建 Debug APK
-.\gradlew.bat assembleDebug    # Windows
-./gradlew assembleDebug        # macOS/Linux
-
-# 4. 构建 Release APK（默认使用 debug 签名，仅用于测试）
-.\gradlew.bat assembleRelease
-
-# 产物路径
-# app/build/outputs/apk/debug/app-debug.apk
-# app/build/outputs/apk/release/app-release.apk
-```
-
-> **签名说明**：当前 release 构建默认使用 debug 签名。如需正式签名分发，请在 `app/build.gradle.kts` 中配置自己的 keystore。
-
-### 首次使用流程
-1. 安装并打开 App → 确认合规声明
-2. 进入「数据」页 → 下载导入模板
-3. 用 Excel 填写客户数据 → 导入 XLSX
-4. 进入「名单」→ 点击「加入队列」
-5. 进入「队列」→ 点击「拨号」→ 系统拨号盘拨打
-6. 通话结束 → 自动弹出跟进登记 → 选结果 → 保存
-7. 回到队列继续下一通
-
-## 数据字段
-
-CSV/XLSX 共用中文表头（严格按此顺序）：
-
-```
-姓名、手机号、备用电话、性别、年龄、微信、来源、意向区域、
-预算(万)下限、预算(万)上限、房型、意向楼盘、
-意向等级(A/B/C/D/U)、备注、下次跟进(YYYY-MM-DD)
-```
-
-**意向等级**：
-- **A** 强烈意向（绿） / **B** 一般（蓝） / **C** 弱（黄） / **D** 无效（红） / **U** 未评级（灰）
-- 不填默认 U，大小写均可
-
-**手机号**：自动去除 `-`、空格、`+86` 前缀后去重。11 位大陆号为首选格式。
+- Kotlin + Jetpack Compose（Material 3）+ MVVM + Hilt
+- Room（SQLite）+ Flow + StateFlow
+- Gradle 8.9 / AGP 8.7.3 / compileSdk 36 / minSdk 31
 
 ## 项目结构
 
 ```
 app/src/main/java/com/realtor/geeksales/
-├── GeekSalesApp.kt              # Application 入口
-├── MainActivity.kt               # 单 Activity + NavHost + BottomBar
-├── navigation/Routes.kt          # 路由定义 + safeNavigate
 ├── ui/
-│   ├── theme/                    # 颜色、字体、主题
-│   ├── components/               # 通用组件（按钮、卡片、徽标、Toast）
-│   └── screen/                   # 各页面
-│       ├── DashboardScreen       # 工作台
-│       ├── CustomerListScreen     # 客户名单
-│       ├── CustomerDetailScreen   # 客户详情
-│       ├── CustomerEditScreen     # 新建/编辑
-│       ├── DialQueueScreen        # 拨号队列
-│       ├── ImportExportScreen     # 导入导出
-│       ├── FollowUpDialog         # 跟进登记
-│       ├── SettingsScreen         # 设置
-│       └── ComplianceScreen       # 合规声明
-├── viewmodel/                    # MVVM ViewModel
+│   ├── screen/                   # 工作台 / 名单 / 详情 / 拨号队列 / 数据页
+│   ├── components/               # Geek* 通用组件（卡片 / 按钮 / 弹层）
+│   └── theme/                    # 主题与状态色（S/A/B/C/D/V 分层色）
+├── viewmodel/                    # MVVM ViewModel（同步 / 导入导出 / 模板跟随）
 ├── data/
 │   ├── db/                       # Room 实体、DAO、数据库
 │   ├── repo/                     # Repository
-│   └── importexport/             # CSV/XLSX 导入导出
-├── telephony/                    # 拨号、通话监听
-├── util/                         # 工具类
+│   ├── remote/                   # WorkbuddyApi（认证 / 分片上传 / 握手）
+│   ├── schema/                   # 模板 Schema（字段 / 分层 / 元信息，配置驱动）
+│   └── importexport/             # CSV/XLSX、通讯录、短信、通话、快照
+├── telephony/                    # 拨号、通话监听、挂断登记
+├── util/                         # 工具类（时间归一化 / 号码归一化）
 └── di/                           # Hilt 依赖注入
 ```
 
 ## 合规与隐私
 
 - 不使用无障碍服务，不自动拨/挂机
-- 数据全部本地存储，卸载即删除
+- 同步需用户显式配置 API Key；密钥加密存储（Android Keystore）
+- 覆盖/清空操作均有备份与确认；删除系统数据需输入确认码
 - 使用请遵守《个人信息保护法》及运营商反骚扰要求
 - 仅致电本人授权或合法来源的客户
 
 ## License
 
 MIT License - 见 [LICENSE](LICENSE)
-
-## 致谢
 
 © 2026 知行工作室
