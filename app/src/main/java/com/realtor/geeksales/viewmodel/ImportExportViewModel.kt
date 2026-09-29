@@ -1068,33 +1068,79 @@ class ImportExportViewModel @Inject constructor(
                 applyCreated(r, toCreate)
                 kotlinx.coroutines.delay(250)
             }
-            // 更新已有联系人（单条 PUT；6 并发 + 真实进度，不再串行假死）
+            // 更新已有联系人（单条 PUT；6 并发 + 真实进度，不再串行假死；失败记录真实服务端原因）
             progress(0.7f, "知行同步：更新已有联系人 ${toUpdate.size} 条…")
             if (toUpdate.isNotEmpty()) {
                 // 6 并发单条 PUT（线上无批量更新接口）：ExecutorService 并发 + 真实进度，不再串行假死
                 val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
+                val recreate = mutableListOf<Pair<Customer, com.realtor.geeksales.data.remote.WbContact>>()
                 try {
                     val futures = toUpdate.map { (c, wb, remoteId) ->
-                        pool.submit(java.util.concurrent.Callable<Boolean> {
+                        pool.submit(java.util.concurrent.Callable<Pair<Boolean, String>?> {
                             kotlinx.coroutines.runBlocking {
-                                try { wbApi.updateContact(remoteId, wb) is WbResult.Success }
-                                catch (t: Exception) { false }
+                                when (val r = wbApi.updateContact(remoteId, wb)) {
+                                    is WbResult.Success -> null
+                                    is WbResult.Error -> {
+                                        // 404 = 线上联系人已被删除 → 本轮自动转分片新建（externalId 幂等自愈）
+                                        val m = r.message
+                                        if (m.contains("404") || m.contains("联系人不存在")) Pair(true, m) else Pair(false, m)
+                                    }
+                                }
                             }
                         })
                     }
                     var done = 0
                     futures.forEach { fut ->
-                        val ok = try { fut.get() } catch (t: Exception) { false }
-                        if (ok) {
+                        val res = try { fut.get() } catch (t: Exception) { Pair(false, t.message ?: "未知错误") }
+                        if (res == null) {
                             updated++
                             val backfill = toUpdate[done]
                             try { kotlinx.coroutines.runBlocking { repo.updateWbContactId(backfill.first.id, backfill.third) } }
                             catch (t: Exception) { /* 回填失败不影响同步结果 */ }
-                        } else failed++
+                        } else if (res.first) {
+                            // 线上已删除 → 自动重建（本轮不视为失败）
+                            val c = toUpdate[done]
+                            recreate.add(c.first to c.second)
+                            if (lastErrMsg.isNullOrBlank()) lastErrMsg = "线上 ${res.second.take(120)}，已自动重建"
+                        } else {
+                            // 真实失败：记录状态码 + 服务端原话，不再写死兜底文案
+                            failed++
+                            val code = res.second.substringBefore(':').trim().toIntOrNull()
+                            if (code != null) lastErrCode = code
+                            if (lastErrMsg.isNullOrBlank()) lastErrMsg = res.second.take(200)
+                        }
                         done++
                         progress(0.7f + 0.22f * done / toUpdate.size.coerceAtLeast(1), "知行同步：更新已有联系人 $done/${toUpdate.size}…")
                     }
                 } finally { pool.shutdown() }
+                // 自动重建被删除的线上联系人（分片通道，externalId 幂等不重复）
+                if (recreate.isNotEmpty()) {
+                    progress(0.93f, "自动重建已删除的线上联系人 ${recreate.size} 条…")
+                    val rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.uploadContacts(recreate.map { it.second }, batchMeta()) }
+                    when (rr) {
+                        is WbResult.Success -> {
+                            val byPhone = recreate.associate { it.second.phone to it.first }
+                            rr.data.items.forEach { item ->
+                                val local = byPhone[item.phone] ?: return@forEach
+                                if (item.id.isNotBlank()) {
+                                    created++
+                                    try { kotlinx.coroutines.runBlocking { repo.updateWbContactId(local.id, item.id) } }
+                                    catch (t: Exception) { /* 回填失败不影响 */ }
+                                }
+                            }
+                            if (rr.data.errors.isNotEmpty()) {
+                                failed += rr.data.errors.count { it.index in recreate.indices }
+                                if (lastErrMsg.isNullOrBlank()) lastErrMsg = rr.data.errors.first().message.take(200)
+                            }
+                        }
+                        is WbResult.Error -> {
+                            failed += recreate.size
+                            val code = rr.message.substringBefore(':').trim().toIntOrNull()
+                            if (code != null) lastErrCode = code
+                            if (lastErrMsg.isNullOrBlank()) lastErrMsg = rr.message.take(200)
+                        }
+                    }
+                }
             }
             // 4) 推送跟进历史（通话登记），批量 /followups/batch，按线上 followups 去重
             var pushed = 0
@@ -1161,6 +1207,7 @@ class ImportExportViewModel @Inject constructor(
                     batchWarn.takeIf { it.isNotEmpty() },
                     "新建 $created / 更新 $updated / 线上保留 $skipped / 失败 $failed（含无号码与特殊号码联系人，均按原样上传）",
                     "跟进推送 $pushed 条，标签自动创建 $createdTags 个${if (failedTags > 0) "（$failedTags 个失败）" else ""}",
+                    "线上已删除联系人已自动重建（见明细）",
                     "备份：$backup",
                     if (hasFail) {
                         when {
