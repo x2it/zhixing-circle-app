@@ -966,17 +966,15 @@ class ImportExportViewModel @Inject constructor(
                     else -> toCreate.add(c to wb)
                 }
             }
-            // 批量新建：≤100/批，externalId 幂等，逐条失败不阻塞
-            val createChunks = toCreate.chunked(100)
-            createChunks.forEachIndexed { ci, chunk ->
-                progress(
-                    0.2f + 0.48f * ci / createChunks.size.coerceAtLeast(1),
-                    "知行同步：上传联系人 ${(ci * 500 + chunk.size).coerceAtMost(toCreate.size)}/${toCreate.size}…"
-                )
+            // 批量新建：分片通道（start → chunk≤100 → commit），commit 成功才算完成；externalId 幂等
+            if (toCreate.isNotEmpty()) {
+                progress(0.2f, "知行同步：上传联系人 ${toCreate.size} 条…")
                 suspend fun applyCreated(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<Pair<Customer, com.realtor.geeksales.data.remote.WbContact>>) {
                     if (rr is WbResult.Success) {
-                        rr.data.items.forEachIndexed { i, item ->
-                            val local = ch.getOrNull(i)?.first ?: return@forEachIndexed
+                        // 分片聚合响应按上传顺序返回，用 phone 匹配回填线上 id（多片下最稳）
+                        val byPhone = ch.associate { it.second.phone to it.first }
+                        rr.data.items.forEach { item ->
+                            val local = byPhone[item.phone] ?: return@forEach
                             if (item.id.isNotBlank()) {
                                 created++
                                 if (local.wbContactId != item.id) repo.updateWbContactId(local.id, item.id)
@@ -995,17 +993,8 @@ class ImportExportViewModel @Inject constructor(
                         failed += ch.size
                     }
                 }
-                var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createContactsBatch(chunk.map { it.second }, batchMeta()) }
-                if (r is WbResult.Error && chunk.size > 100) {
-                    // 大包失败 → 拆 100 重发（服务端上限 100/500 自适应）
-                    chunk.chunked(100).forEach { c100 ->
-                        applyCreated(withBackoff { wbApi.createContactsBatch(c100.map { it.second }, batchMeta()) }, c100)
-                        kotlinx.coroutines.yield()
-                    }
-                } else {
-                    applyCreated(r, chunk)
-                }
-                kotlinx.coroutines.yield()
+                val r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.uploadContacts(toCreate.map { it.second }, batchMeta()) }
+                applyCreated(r, toCreate)
                 kotlinx.coroutines.delay(250)
             }
             // 更新已有联系人（单条 PUT；6 并发 + 真实进度，不再串行假死）
@@ -1304,51 +1293,24 @@ class ImportExportViewModel @Inject constructor(
                 )
                 return@withContext
             }
-            // 批量推送：500/批（Web 端实测不再限流）+ 429/5xx 指数退避重试 + 400 降级 100（契约兼容）
-            // 服务端按 号码+时间+内容 幂等去重，重试不会产生重复数据
+            // 批量推送：分片通道（start → chunk≤100 → commit），commit 成功才算完成；
+            // 服务端按 号码+时间+内容 幂等去重，重试不会产生重复数据；整批成功才推进游标
             if (toPush.isNotEmpty()) {
                 var maxOkDate = since
-                val chunks = toPush.chunked(100)
-                chunks.forEachIndexed { ci, chunk ->
-                    progress(
-                        0.1f + 0.8f * ci / chunks.size.coerceAtLeast(1),
-                        "短信同步：上传 ${(ci * 500 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
-                    )
-                    var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createMessagesBatch(chunk.map { it.second }, batchMeta()) }
-                    if (r is WbResult.Error) {
-                        val code = r.message.substringBefore(':').trim().toIntOrNull()
-                        lastErrCode = code ?: lastErrCode
-                        lastErrMsg = r.message.take(200)
-                        // 大包失败（5xx 服务端繁忙/上限、400/413/415 契约上限）→ 自动拆 100 重发，
-                        // 服务端上限是 100 还是 500 都自适应；100 仍失败才计失败
-                        if (chunk.size > 100) {
-                            chunk.chunked(100).forEach { c100 ->
-                                when (val r2 = withBackoff { wbApi.createMessagesBatch(c100.map { it.second }, batchMeta()) }) {
-                                    is WbResult.Success -> {
-                                        pushed += r2.data.items.count { it.id.isNotBlank() }
-                                        failed += r2.data.errors.size
-                                        if (r2.data.errors.isEmpty()) maxOkDate = maxOf(maxOkDate, c100.maxOf { it.first })
-                                    }
-                                    is WbResult.Error -> {
-                                        val c2 = r2.message.substringBefore(':').trim().toIntOrNull()
-                                        if (c2 != null) lastErrCode = c2
-                                        lastErrMsg = r2.message.take(200)
-                                        failed += c100.size
-                                    }
-                                }
-                                kotlinx.coroutines.yield()
-                            }
-                        } else {
-                            failed += chunk.size
-                        }
-                    } else if (r is WbResult.Success) {
+                progress(0.1f, "短信同步：上传 ${toPush.size} 条…")
+                val r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.uploadMessages(toPush.map { it.second }, batchMeta()) }
+                when (r) {
+                    is WbResult.Success -> {
                         pushed += r.data.items.count { it.id.isNotBlank() }
                         failed += r.data.errors.size
-                        // 整批成功才推进游标（失败批下次仍在游标之后，必被重扫补推）
-                        if (r.data.errors.isEmpty()) maxOkDate = maxOf(maxOkDate, chunk.maxOf { it.first })
+                        if (r.data.errors.isEmpty()) maxOkDate = maxOf(maxOkDate, toPush.maxOf { it.first })
                     }
-                    // 批间 250ms，降低瞬时并发（Web 端建议）
-                    kotlinx.coroutines.delay(250)
+                    is WbResult.Error -> {
+                        val code = r.message.substringBefore(':').trim().toIntOrNull()
+                        if (code != null) lastErrCode = code
+                        lastErrMsg = r.message.take(200)
+                        failed += toPush.size
+                    }
                 }
                 if (maxOkDate > since) prefs.edit().putLong("sms_sync_upto_date", maxOkDate).apply()
             }
@@ -1363,7 +1325,7 @@ class ImportExportViewModel @Inject constructor(
                 403 -> "云端同步开关未开启：请先开启短信同步开关再试"
                 429 -> "线上限流：已自动重试仍失败，本地数据未受影响，稍后再试"
                 in 400..499 -> "请求被云端拒绝（HTTP $lastErrCode）：多为字段格式问题，已保留本地数据"
-                in 500..599 -> "线上服务繁忙或批次过大被拒（HTTP $lastErrCode）：已自动拆小批重试，本地数据未受影响"
+                in 500..599 -> "线上服务异常（HTTP $lastErrCode）：已按分片重试仍失败，本地数据未受影响，稍后再试"
                 else -> null
             }
             _status.value = IOStatus(
@@ -1509,64 +1471,40 @@ class ImportExportViewModel @Inject constructor(
                 )
                 return@withContext
             }
-            // 3) 推送未上传通话（增量，≤100/批；direction/callDate 按线上契约）
+            // 3) 推送未上传通话（增量，分片通道 start → chunk≤100 → commit；direction/callDate 按线上契约）
             // 单次全量推送（≤5000）：历史通话一次同步到位，不再被 500 条上限截断
             val toPush = repo.pendingCallUploads(5000)
             var pushed = 0
             var pushFailed = 0
             if (toPush.isNotEmpty()) {
-                val chunks = toPush.chunked(100)
-                chunks.forEachIndexed { ci, chunk ->
-                    progress(
-                        0.12f + 0.4f * ci / chunks.size.coerceAtLeast(1),
-                        "通话记录：上传 ${(ci * 500 + chunk.size).coerceAtMost(toPush.size)}/${toPush.size}…"
-                    )
-                    suspend fun applyCalls(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<com.realtor.geeksales.data.db.CallRecord>) {
-                        if (rr is WbResult.Success) {
-                            // 响应 items 与请求顺序一致，回填线上 id
-                            rr.data.items.forEachIndexed { i, item ->
-                                val local = ch.getOrNull(i) ?: return@forEachIndexed
-                                if (item.id.isNotBlank()) {
-                                    pushed++
-                                    if (local.wbCallId != item.id) repo.updateWbCallId(local.id, item.id)
-                                }
+                progress(0.12f, "通话记录：上传 ${toPush.size} 条…")
+                suspend fun applyCalls(rr: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse>, ch: List<com.realtor.geeksales.data.db.CallRecord>) {
+                    if (rr is WbResult.Success) {
+                        // 分片聚合响应按上传顺序返回，回填线上 id
+                        rr.data.items.forEachIndexed { i, item ->
+                            val local = ch.getOrNull(i) ?: return@forEachIndexed
+                            if (item.id.isNotBlank()) {
+                                pushed++
+                                if (local.wbCallId != item.id) repo.updateWbCallId(local.id, item.id)
                             }
-                            pushFailed += rr.data.errors.count { it.index in ch.indices }
-                        } else {
-                            pushFailed += ch.size
                         }
-                    }
-                    val wbCalls = chunk.map { c ->
-                        com.realtor.geeksales.data.remote.WbCall(
-                            phone = c.phone,
-                            direction = c.direction,
-                            duration = c.duration,
-                            callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
-                            note = c.note
-                        )
-                    }
-                    var r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.createCallsBatch(wbCalls, batchMeta()) }
-                    if (r is WbResult.Error && chunk.size > 100) {
-                        // 大包失败 → 拆 100 重发（服务端上限 100/500 自适应）
-                        chunk.chunked(100).forEach { c100 ->
-                            val wbC100 = c100.map { c ->
-                                com.realtor.geeksales.data.remote.WbCall(
-                                    phone = c.phone,
-                                    direction = c.direction,
-                                    duration = c.duration,
-                                    callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
-                                    note = c.note
-                                )
-                            }
-                            applyCalls(withBackoff { wbApi.createCallsBatch(wbC100, batchMeta()) }, c100)
-                            kotlinx.coroutines.yield()
-                        }
+                        pushFailed += rr.data.errors.count { it.index in ch.indices }
                     } else {
-                        applyCalls(r, chunk)
+                        pushFailed += ch.size
                     }
-                    kotlinx.coroutines.yield()
-                    kotlinx.coroutines.delay(250)
                 }
+                val wbCalls = toPush.map { c ->
+                    com.realtor.geeksales.data.remote.WbCall(
+                        phone = c.phone,
+                        direction = c.direction,
+                        duration = c.duration,
+                        callDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(c.callDate)),
+                        note = c.note
+                    )
+                }
+                val r: WbResult<com.realtor.geeksales.data.remote.WbBatchResponse> = withBackoff { wbApi.uploadCalls(wbCalls, batchMeta()) }
+                applyCalls(r, toPush)
+                kotlinx.coroutines.delay(250)
             }
             // 4) 拉取云端通话去重入库（互动档案完整性）
             progress(0.6f, "拉取云端通话记录…")

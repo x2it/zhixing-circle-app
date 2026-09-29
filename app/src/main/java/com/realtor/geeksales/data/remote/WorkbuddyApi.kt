@@ -59,6 +59,7 @@ data class WbSchemaBundle(
 data class WbBatchContactResult(
     val id: String = "",
     val name: String = "",
+    val phone: String = "",
     val tier: String? = null,
     val tags: List<WbTag> = emptyList()
 )
@@ -403,18 +404,7 @@ class WorkbuddyApi @Inject constructor(
                 append("\"source\":\"${esc(batchMeta.source)}\",")
                 append("\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\",")
                 append("\"items\":[")
-                append(items.joinToString(",") { m ->
-                    buildString {
-                        append("{")
-                        if (!m.contactId.isNullOrBlank()) append("\"contactId\":\"${esc(m.contactId)}\",")
-                        append("\"phone\":\"${esc(m.phone)}\",")
-                        append("\"body\":\"${esc(m.body)}\",")
-                        append("\"direction\":\"${esc(m.direction)}\"")
-                        // messageDate 为最后可选字段：前置逗号、不带尾逗号，JSON 永远合法
-                        if (!m.messageDate.isNullOrBlank()) append(",\"messageDate\":\"${esc(m.messageDate)}\"")
-                        append("}")
-                    }
-                })
+                append(items.joinToString(",") { buildMessageJson(it) })
                 append("]}")
             }
             val resp = post("/messages/batch", body)
@@ -424,6 +414,72 @@ class WorkbuddyApi @Inject constructor(
                 .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
                 .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
+
+    private fun buildMessageJson(m: WbMessage): String = buildString {
+        append("{")
+        if (!m.contactId.isNullOrBlank()) append("\"contactId\":\"${esc(m.contactId)}\",")
+        append("\"phone\":\"${esc(m.phone)}\",")
+        append("\"body\":\"${esc(m.body)}\",")
+        append("\"direction\":\"${esc(m.direction)}\"")
+        // messageDate 为最后可选字段：前置逗号、不带尾逗号，JSON 永远合法
+        if (!m.messageDate.isNullOrBlank()) append(",\"messageDate\":\"${esc(m.messageDate)}\"")
+        append("}")
+    }
+
+    // ---- v2.6.0 分片上传通道：start → chunk(≤100/片) → commit；commit 成功才算完成（网关 1MB 硬限规避） ----
+
+    @kotlinx.serialization.Serializable
+    data class WbSyncStart(val uploadId: String = "", val limits: Map<String, String> = emptyMap())
+
+    @kotlinx.serialization.Serializable
+    data class WbSyncChunk(val uploadId: String = "", val received: Int = 0, val total: Int = 0)
+
+    /**
+     * 通用分片上传：POST /api/sync/upload/{start,chunk,commit}。
+     * 每片 ≤100 条绝对安全；顺序上传（服务端顺序无关）；commit 之前不写库，commit 成功才算整批完成。
+     * 返回聚合响应（items/created/skipped/errors），items 顺序与上传顺序一致。
+     */
+    suspend fun uploadChunked(kind: String, items: List<String>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        withContext(Dispatchers.IO) {
+            if (items.isEmpty()) return@withContext WbResult.Success(WbBatchResponse())
+            // 1) start
+            val startBody = buildString {
+                append("{\"kind\":\"${esc(kind)}\",\"total\":${items.size},")
+                append("\"batchName\":\"${esc(batchMeta.batchName)}\",\"source\":\"${esc(batchMeta.source)}\",\"deviceInfo\":\"${esc(batchMeta.deviceInfo)}\"}")
+            }
+            val startResp = post("/sync/upload/start", startBody)
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(startResp)) return@withContext WbResult.Error(extractError(startResp))
+            val uploadId = runCatching { json.decodeFromString<WbSyncStart>(startResp).uploadId }.getOrNull()
+                ?: return@withContext WbResult.Error("分片上传启动失败：响应解析异常（${startResp.take(120)}）")
+            // 2) chunk ×N（≤100/片，顺序上传；任一片失败立即中止，commit 未发生则云端不写库）
+            items.chunked(100).forEachIndexed { i, chunk ->
+                val body = buildString { append("{\"items\":["); append(chunk.joinToString(",")); append("]}") }
+                val resp = post("/sync/upload/chunk?uploadId=$uploadId", body)
+                    ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+                if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
+                kotlinx.coroutines.yield()
+            }
+            // 3) commit（写库仅在此刻发生）
+            val commitResp = post("/sync/upload/commit?uploadId=$uploadId", "{}")
+                ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+            if (!is2xx(commitResp)) return@withContext WbResult.Error(extractError(commitResp))
+            runCatching { json.decodeFromString<WbBatchResponse>(commitResp) }
+                .map { WbResult.Success(it) as WbResult<WbBatchResponse> }
+                .getOrElse { WbResult.Error("分片上传提交解析失败：${it.message}") }
+        }
+
+    /** 联系人分片上传（内部按 ≤100 条分片，commit 聚合） */
+    suspend fun uploadContacts(items: List<WbContact>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        uploadChunked("contacts", items.map { buildContactJson(it) }, batchMeta)
+
+    /** 短信分片上传 */
+    suspend fun uploadMessages(items: List<WbMessage>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        uploadChunked("messages", items.map { buildMessageJson(it) }, batchMeta)
+
+    /** 通话记录分片上传 */
+    suspend fun uploadCalls(items: List<WbCall>, batchMeta: WbBatchMeta = WbBatchMeta()): WbResult<WbBatchResponse> =
+        uploadChunked("calls", items.map { buildCallJson(it) }, batchMeta)
 
     /** 查询线上短信同步开关；false 时 messages 接口会返回 403，应提示用户先在网页开启 */
     suspend fun smsSyncEnabled(): WbResult<Boolean> = withContext(Dispatchers.IO) {
@@ -790,6 +846,8 @@ class WorkbuddyApi @Inject constructor(
                 "HTTP 401" -> "同步失败：API Key 无效或未授权（请检查密钥；云端按账号隔离，密钥与账号一对一）"
                 "HTTP 403" -> "同步失败：云端该功能未开启或无权访问（请在网页「API 接入」页开启对应同步开关）"
                 "HTTP 404" -> "同步失败：云端接口不存在（${serverMsg ?: "请联系云端补齐接口"}）"
+                "HTTP 429" -> "同步失败：请求过于频繁（429），已自动等待重试仍失败，本地数据未受影响，稍后再试"
+                "HTTP 500" -> "同步失败：数据量过大或线上服务异常（500），已按分片重试仍失败，请稍后再试"
                 else -> "同步失败（HTTP ${status.removePrefix("HTTP ")}）：${serverMsg?.takeIf { it.isNotBlank() } ?: raw.ifBlank { "服务端错误" }}"
             }
         }
