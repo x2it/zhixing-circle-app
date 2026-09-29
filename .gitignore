@@ -41,3 +41,5 @@ send_*.py
 /captures/
 .externalNativeBuild/
 .cxx/
+# 构建日志
+*.log
