@@ -732,6 +732,111 @@ class ImportExportViewModel @Inject constructor(
         }
     }
 
+    /** 重置通话同步状态：本地通话记录的线上标记（wbCallId）全部清空，
+     *  之后「同步到云端」会全量重传（云端已删的重新上传；云端仍在的服务端幂等跳过，不产生重复）。
+     *  适用场景：云端通话被删除/清空后想重新备份全量历史；短信无需重置（同步始终读系统短信库全量）。 */
+    fun resetCallSyncState() = doRun("重置通话同步状态中…") {
+        withContext(Dispatchers.IO) {
+            repo.clearWbCallIds()
+            _status.value = IOStatus(
+                message = "通话同步状态已重置（本地记录保留）",
+                syncSummary = "现在点「同步到云端」将全量重传通话记录；云端已删的会重新上传，云端仍存在的自动跳过（服务端幂等）"
+            )
+        }
+    }
+
+    /** 清空手机系统短信（需 WRITE_SMS）：清空前自动备份 CSV 到 下载/TMA备份；仅授予读权限时中止提示。
+     *  注意：这是删除手机系统短信库本身，不可恢复——UI 必须强确认（输入「清空」）后调用 */
+    fun clearSystemSms() = doRun("清空手机系统短信中…") {
+        withContext(Dispatchers.IO) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, "android.permission.WRITE_SMS")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(
+                    message = "缺少「修改短信」权限：系统设置 → 应用 → TMA → 权限 → 短信 → 允许（删除短信需要写权限，仅读权限无法执行）",
+                    isError = true
+                )
+                return@withContext
+            }
+            val backup = smsExporter.backupToDownloads()
+            if (backup.error != null) {
+                _status.value = IOStatus(message = "清空前自动备份失败，已中止：${backup.error}", isError = true)
+                return@withContext
+            }
+            val n = ctx.contentResolver.delete(android.provider.Telephony.Sms.CONTENT_URI, null, null)
+            _status.value = IOStatus(
+                message = "已清空手机系统短信 $n 条（清空前已自动备份到 下载/TMA备份）",
+                syncSummary = "此操作不可恢复；备份 CSV 可保留备查"
+            )
+        }
+    }
+
+    /** 清空手机系统通话记录（需 WRITE_CALL_LOG）：清空前自动备份系统通话到 CSV */
+    fun clearSystemCalls() = doRun("清空手机系统通话中…") {
+        withContext(Dispatchers.IO) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, "android.permission.WRITE_CALL_LOG")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(
+                    message = "缺少「修改通话记录」权限：系统设置 → 应用 → TMA → 权限 → 电话/通话记录 → 允许",
+                    isError = true
+                )
+                return@withContext
+            }
+            val rows = mutableListOf<List<String>>()
+            ctx.contentResolver.query(
+                android.provider.CallLog.Calls.CONTENT_URI,
+                arrayOf(android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.TYPE, android.provider.CallLog.Calls.DATE, android.provider.CallLog.Calls.DURATION),
+                null, null, null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val type = c.getInt(1)
+                    val dir = when (type) {
+                        android.provider.CallLog.Calls.INCOMING_TYPE -> "呼入"
+                        android.provider.CallLog.Calls.OUTGOING_TYPE -> "呼出"
+                        else -> "未接"
+                    }
+                    rows.add(listOf(c.getString(0) ?: "", dir, c.getLong(2).toString(), c.getLong(3).toString()))
+                }
+            }
+            val csv = backupLocalCsv("通话记录-清空前", listOf("号码", "方向", "时间戳(ms)", "时长(秒)"), rows)
+            if (rows.isNotEmpty() && csv == null) {
+                _status.value = IOStatus(message = "清空前通话备份失败，已中止", isError = true)
+                return@withContext
+            }
+            val n = ctx.contentResolver.delete(android.provider.CallLog.Calls.CONTENT_URI, null, null)
+            _status.value = IOStatus(
+                message = "已清空手机系统通话 $n 条（清空前已自动备份到 下载/TMA备份）",
+                syncSummary = "此操作不可恢复；备份 CSV 可保留备查"
+            )
+        }
+    }
+
+    /** 清空手机系统通讯录（需 WRITE_CONTACTS）：清空前自动备份客户 XLSX 到 下载/TMA备份 */
+    fun clearSystemContacts() = doRun("清空手机系统通讯录中…") {
+        withContext(Dispatchers.IO) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.WRITE_CONTACTS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                _status.value = IOStatus(
+                    message = "缺少「修改联系人」权限：系统设置 → 应用 → TMA → 权限 → 通讯录 → 允许",
+                    isError = true
+                )
+                return@withContext
+            }
+            val backup = backupToDownloads()
+            if (backup == null) {
+                _status.value = IOStatus(message = "清空前客户备份失败，已中止", isError = true)
+                return@withContext
+            }
+            val n = ctx.contentResolver.delete(android.provider.ContactsContract.RawContacts.CONTENT_URI, null, null)
+            _status.value = IOStatus(
+                message = "已清空手机系统通讯录 $n 条（清空前已自动备份到 下载/TMA备份）",
+                syncSummary = "此操作不可恢复；备份 XLSX 可恢复客户数据"
+            )
+        }
+    }
+
     /** v2.7.3 设备握手：进数据页登记设备与环境（幂等轻量），云端据此下发限制/开关与溯源 */
     fun syncHandshake() {
         if (apiKeyStore.load().isNullOrBlank()) return
@@ -1363,8 +1468,9 @@ class ImportExportViewModel @Inject constructor(
             // 云端为空：中止并保留本地，绝不静默清空（防止云端数据缺失时本地被清成空）
             if (remote.isEmpty()) {
                 _status.value = IOStatus(
-                    message = "云端当前没有短信（线上短信库为空），本地记录已保留未动；请先在云端确认短信存在后再覆盖",
-                    isError = true
+                    message = "云端当前没有短信（线上短信库为空），本地记录已保留未动",
+                    isError = true,
+                    syncSummary = "若你想用手机系统短信重新备份到云端：点「同步到云端」即可全量上传（短信始终读取手机系统短信库，无需任何重置）"
                 )
                 return@withContext
             }
@@ -1423,8 +1529,9 @@ class ImportExportViewModel @Inject constructor(
             // 云端为空：中止并保留本地，绝不静默清空
             if (remote.isEmpty()) {
                 _status.value = IOStatus(
-                    message = "云端当前没有通话记录（线上通话库为空），本地记录已保留未动；请先在云端确认记录存在后再覆盖",
-                    isError = true
+                    message = "云端当前没有通话记录（线上通话库为空），本地记录已保留未动",
+                    isError = true,
+                    syncSummary = "若你刚清空云端想重新备份：先点「重置通话同步状态」，再点「同步到云端」即可全量重传（服务端幂等，不会重复）"
                 )
                 return@withContext
             }
@@ -1816,11 +1923,24 @@ class ImportExportViewModel @Inject constructor(
             }
             progress(0.95f, "通话记录同步：完成汇总…")
             val noNew = mirror.imported == 0 && pushed == 0 && pulled == 0
+            // 人性化异常检测：云端少于本地记录且本轮无新增 → 提示可能是云端被清空过，并给出 App 内处置路径
+            val cloudHint = runCatching {
+                if (!noNew) return@runCatching null
+                val localTotal = repo.allCalls().size
+                val cloudTotal = when (val st = wbApi.syncStatus()) {
+                    is WbResult.Success -> st.data.callTotal
+                    else -> return@runCatching null
+                }
+                if (localTotal > 0 && localTotal > cloudTotal) {
+                    "检测到云端通话仅 $cloudTotal 条，本地记录有 $localTotal 条——可能云端被清空/删除过。处置：点「重置通话同步状态」清空本地上传标记，再点「同步到云端」即可全量重传（服务端幂等，不会重复）"
+                } else null
+            }.getOrNull()
             _status.value = IOStatus(
                 message = if (noNew) "未发现新通话记录（本机无新增，或已全部同步过）" else "通话记录同步完成",
                 isError = pushFailed > 0,
                 syncSummary = if (noNew) {
-                    "本机最近无新增通话；可稍后再试，或确认「通话记录」权限已开启"
+                    if (cloudHint != null) cloudHint
+                    else "本机最近无新增通话；可稍后再试，或确认「通话记录」权限已开启"
                 } else {
                     "本机新增镜像 $mirror.imported 条（关联客户 $mirror.matched 条），推送云端 $pushed 条${if (pushFailed > 0) "（失败 $pushFailed 条）" else ""}，从云端拉回 $pulled 条；通话为增量同步，重复同步会自动补全历史"
                 }

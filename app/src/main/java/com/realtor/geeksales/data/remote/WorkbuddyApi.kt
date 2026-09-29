@@ -523,6 +523,23 @@ class WorkbuddyApi @Inject constructor(
         uploadChunkedBatched("calls", items.map { buildCallJson(it) }, 1000, batchMeta)
 
     /** 查询线上短信同步开关；false 时 messages 接口会返回 403，应提示用户先在网页开启 */
+    /** 云端同步状态（总量）：GET /api/settings/sync-status → smsTotal/callTotal（异常检测用） */
+    data class WbSyncStatus(val smsTotal: Int = 0, val callTotal: Int = 0)
+
+    suspend fun syncStatus(): WbResult<WbSyncStatus> = withContext(Dispatchers.IO) {
+        val body = get("/settings/sync-status")
+            ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")
+        val v = runCatching {
+            val el = json.parseToJsonElement(body) as? JsonObject ?: return@runCatching null
+            WbSyncStatus(
+                smsTotal = el["smsTotal"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                callTotal = el["callTotal"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            )
+        }.getOrNull()
+        if (v == null) WbResult.Error("响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：$body")
+        else WbResult.Success(v)
+    }
+
     suspend fun smsSyncEnabled(): WbResult<Boolean> = withContext(Dispatchers.IO) {
         val body = get("/settings/sms-sync")
             ?: return@withContext WbResult.Error("网络请求失败或未配置 API Key")

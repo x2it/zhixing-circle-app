@@ -298,6 +298,7 @@ class CustomerRepository @Inject constructor(
     suspend fun callByWbId(wbId: String): CallRecord? = callDao.findByWbCallId(wbId)
 
     suspend fun updateWbCallId(localId: Long, wbId: String) = callDao.updateWbCallId(localId, wbId)
+    suspend fun clearWbCallIds() = callDao.clearWbCallIds()
 
     /** 清空通话表（时光机恢复前） */
     suspend fun clearAllCalls() = callDao.clearAll()

@@ -17,7 +17,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +57,18 @@ fun DashboardScreen(
     onNav: (String) -> Unit,
     vm: DashboardViewModel = hiltViewModel()
 ) {
+    // 模板跟随：进入工作台即检测线上生效模板（isActive），变化则自动应用并提示。
+    // 与数据页逻辑一致，保证「线上切模板 → 回工作台」分层语义立即更新，无需先进数据页
+    val ieVm: com.realtor.geeksales.viewmodel.ImportExportViewModel = hiltViewModel()
+    var tierFollowed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        ieVm.checkTemplateAuto { name ->
+            if (name != null && !tierFollowed) {
+                tierFollowed = true
+                com.realtor.geeksales.ui.components.GlobalToast.showSuccess("线上模板已切换，已自动应用「$name」，分层已更新")
+            }
+        }
+    }
     val totalCustomers by vm.totalCustomers.collectAsStateWithLifecycle()
     val calledToday by vm.calledToday.collectAsStateWithLifecycle()
     val notCalledToday by vm.notCalledToday.collectAsStateWithLifecycle()

@@ -59,6 +59,10 @@ interface CallDao {
     @Query("UPDATE call_records SET wbCallId = :wbId WHERE id = :localId")
     suspend fun updateWbCallId(localId: Long, wbId: String)
 
+    /** 重置全部通话的线上标记（云端已删/想全量重传时用；本地记录保留，服务端幂等重推安全） */
+    @Query("UPDATE call_records SET wbCallId = NULL")
+    suspend fun clearWbCallIds()
+
     @Query("SELECT * FROM call_records ORDER BY callDate DESC")
     suspend fun getAll(): List<CallRecord>
 

@@ -57,9 +57,9 @@ data class TemplateMeta(
 
     /** 分层的完整语义文案：字母 · 语义（U 显示为 / · 未分类） */
     fun tierLabel(t: String): String {
-        // 语义归一：去掉“客户”等冗余后缀，避免长文案误导（线上模板 description 权威，仅做展示清洗）
-        val label = (tierLabels[t] ?: t).removeSuffix("客户")
-        return "${tierBadge(t)} · $label"
+        // 语义归一：去掉“客户”等冗余后缀，避免长文案误导（线上模板 description 权威，仅做展示清洗）。
+        // 只返回语义文字，不带字母前缀——字母由 tierBadge() 单独展示，避免“徽标 S + 行内 S·xxx”重复
+        return (tierLabels[t] ?: t).removeSuffix("客户")
     }
 
     /** 分层建议节奏（通用销售节奏，行业无关；驱动 Dashboard/编辑页的层次提示） */

@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.realtor.geeksales.ui.components.GeekCard
 import com.realtor.geeksales.ui.components.GeekGhostButton
+import com.realtor.geeksales.ui.components.GeekTextField
 import com.realtor.geeksales.ui.components.GeekPrimaryButton
 import com.realtor.geeksales.ui.components.GeekTopBar
 import com.realtor.geeksales.ui.components.LoadingState
@@ -92,6 +93,11 @@ fun ImportExportScreen(
     var confirmOverwriteCalls by remember { mutableStateOf(false) }
     var confirmClearCloudSms by remember { mutableStateOf(false) }
     var confirmClearCloudCalls by remember { mutableStateOf(false) }
+    var confirmResetCallSync by remember { mutableStateOf(false) }
+    var confirmClearSysSms by remember { mutableStateOf(false) }
+    var confirmClearSysCalls by remember { mutableStateOf(false) }
+    var confirmClearSysContacts by remember { mutableStateOf(false) }
+    var clearSysCode by remember { mutableStateOf("") }
     // API Key 输入状态
     var apiKeyInput by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
@@ -520,6 +526,21 @@ fun ImportExportScreen(
                 GeekGhostButton(if (busy) "处理中…" else "清空云端短信记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudSms = true })
                 Spacer(Modifier.height(6.dp))
                 GeekGhostButton(if (busy) "处理中…" else "清空云端通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudCalls = true })
+                Spacer(Modifier.height(6.dp))
+                Text("重置通话同步状态：云端通话被删除/清空后，想全量重新备份时用。清空本地上传标记，本地记录保留；重传时服务端幂等跳过已存在项，不会重复。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "重置通话同步状态", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmResetCallSync = true })
+            }
+
+            // ================= 清空手机系统数据（删除系统库本身，不可恢复；强确认=输入「清空」） =================
+            SectionCard("清空手机系统数据", "直接删除手机系统自带的短信 / 通话 / 通讯录（不是 App 数据、不是云端）。每个操作前自动备份到「下载/TMA备份」，并需输入「清空」二字确认，防止误操作。") {
+                Text("清空系统短信：删除手机系统短信库全部短信（需「修改短信」权限）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "清空系统短信", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysSms = true })
+                Spacer(Modifier.height(6.dp))
+                Text("清空系统通话：删除手机系统通话记录全部条目（需「修改通话记录」权限）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "清空系统通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysCalls = true })
+                Spacer(Modifier.height(6.dp))
+                Text("清空系统通讯录：删除手机系统通讯录全部联系人（需「修改联系人」权限，已授权时可用）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                GeekGhostButton(if (busy) "处理中…" else "清空系统通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysContacts = true })
             }
 
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================
@@ -539,7 +560,7 @@ fun ImportExportScreen(
                         Text("扩展列：暂无（点「拉取线上模板」或「添加字段」即可新增，不限于行业）", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                     Text(
-                        "分层选项：${tierMeta.tiers.joinToString(" ") { tierMeta.tierLabel(it) }}（跟随模板）",
+                        "分层选项：${tierMeta.tiers.joinToString(" ") { "${tierMeta.tierBadge(it)}:${tierMeta.tierLabel(it)}" }}（跟随模板）",
                         color = TextMuted, style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
@@ -636,6 +657,54 @@ fun ImportExportScreen(
                     Text("确认清空", color = Danger)
                 }
                 androidx.compose.material3.TextButton(onClick = { confirmClearCloudCalls = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    if (confirmResetCallSync) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmResetCallSync = false },
+            title = { Text("重置通话同步状态？", color = TextPrimary) },
+            text = { Text("将清空本地通话记录的上传标记（本地记录本身保留），之后「同步到云端」会全量重传。云端已删的会重新上传，云端仍存在的自动跳过（服务端幂等，不会产生重复）。", color = TextSecondary) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmResetCallSync = false; vm.resetCallSyncState() }) {
+                    Text("确认重置", color = Danger)
+                }
+                androidx.compose.material3.TextButton(onClick = { confirmResetCallSync = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+    // 清空手机系统数据：强确认（输入「清空」二字才可执行），防误操作
+    if (confirmClearSysSms || confirmClearSysCalls || confirmClearSysContacts) {
+        val (sysTitle, sysDesc) = when {
+            confirmClearSysSms -> "清空手机系统短信？" to "将直接删除手机系统短信库中的全部短信（不是 App 数据、不是云端）。执行前自动备份到「下载/TMA备份」。此操作不可恢复，请谨慎。"
+            confirmClearSysCalls -> "清空手机系统通话记录？" to "将直接删除手机系统通话记录中的全部条目（不是 App 数据、不是云端）。执行前自动备份到「下载/TMA备份」。此操作不可恢复，请谨慎。"
+            else -> "清空手机系统通讯录？" to "将直接删除手机系统通讯录中的全部联系人（不是 App 数据、不是云端）。执行前自动备份客户 XLSX 到「下载/TMA备份」。此操作不可恢复，请谨慎。"
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmClearSysSms = false; confirmClearSysCalls = false; confirmClearSysContacts = false; clearSysCode = "" },
+            title = { Text(sysTitle, color = Danger) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(sysDesc, color = TextSecondary)
+                    Text("输入「清空」以确认：", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                    GeekTextField(clearSysCode, { clearSysCode = it }, placeholder = "清空", label = "确认码")
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = clearSysCode.trim() == "清空",
+                    onClick = {
+                        clearSysCode = ""
+                        when {
+                            confirmClearSysSms -> { confirmClearSysSms = false; vm.clearSystemSms() }
+                            confirmClearSysCalls -> { confirmClearSysCalls = false; vm.clearSystemCalls() }
+                            confirmClearSysContacts -> { confirmClearSysContacts = false; vm.clearSystemContacts() }
+                        }
+                    }
+                ) {
+                    Text(if (clearSysCode.trim() == "清空") "确认清空" else "请输入「清空」", color = if (clearSysCode.trim() == "清空") Danger else TextMuted)
+                }
+                androidx.compose.material3.TextButton(onClick = { confirmClearSysSms = false; confirmClearSysCalls = false; confirmClearSysContacts = false; clearSysCode = "" }) { Text("取消", color = TextSecondary) }
             }
         )
     }
