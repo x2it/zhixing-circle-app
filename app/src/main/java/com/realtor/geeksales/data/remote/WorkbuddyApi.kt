@@ -624,12 +624,12 @@ class WorkbuddyApi @Inject constructor(
                 .getOrElse { WbResult.Error("批量响应解析失败（若内容为网页请检查服务器地址是否缺少 /api）：${it.message}") }
         }
 
-    /** 批量删除线上短信（DELETE /api/messages，{"ids":[…]≤200}，分批执行）——清空重传/数据治理用 */
+    /** 批量删除线上短信（POST /api/messages/batch-delete，{"ids":[…]≤200}，分批执行）——清空重传/数据治理用；v2.7.1 起网关拦截 DELETE 方法，统一改 POST */
     suspend fun deleteMessages(ids: List<String>): WbResult<Unit> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext WbResult.Success(Unit)
         for (chunk in ids.chunked(200)) {
             val body = "{\"ids\":[${chunk.joinToString(",") { "\"${esc(it)}\"" }}]}"
-            val resp = request("DELETE", "/messages", body)
+            val resp = request("POST", "/messages/batch-delete", body) // v2.7.1: 网关拦截 DELETE，改用 POST
             if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             kotlinx.coroutines.delay(120)
@@ -637,12 +637,12 @@ class WorkbuddyApi @Inject constructor(
         WbResult.Success(Unit)
     }
 
-    /** 批量删除线上联系人（DELETE /api/contacts，{"ids":[…]≤200}，分批执行；服务端 v2.7.4 起支持） */
+    /** 批量删除线上联系人（POST /api/contacts/batch-delete，{"ids":[…]≤200}，分批执行；服务端 v2.7.4 起支持） */
     suspend fun deleteContacts(ids: List<String>): WbResult<Unit> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext WbResult.Success(Unit)
         for (chunk in ids.chunked(200)) {
             val body = "{\"ids\":[${chunk.joinToString(",") { "\"${esc(it)}\" " }}]}"
-            val resp = request("DELETE", "/contacts", body)
+            val resp = request("POST", "/contacts/batch-delete", body) // v2.7.1: 网关拦截 DELETE，改用 POST
             if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             kotlinx.coroutines.delay(120)
@@ -650,12 +650,12 @@ class WorkbuddyApi @Inject constructor(
         WbResult.Success(Unit)
     }
 
-    /** 批量删除线上通话（DELETE /api/calls，{"ids":[…]≤200}，分批执行） */
+    /** 批量删除线上通话（POST /api/calls/batch-delete，{"ids":[…]≤200}，分批执行） */
     suspend fun deleteCalls(ids: List<String>): WbResult<Unit> = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext WbResult.Success(Unit)
         for (chunk in ids.chunked(200)) {
             val body = "{\"ids\":[${chunk.joinToString(",") { "\"${esc(it)}\"" }}]}"
-            val resp = request("DELETE", "/calls", body)
+            val resp = request("POST", "/calls/batch-delete", body) // v2.7.1: 网关拦截 DELETE，改用 POST
             if (resp == null) return@withContext WbResult.Error("网络请求失败或未配置 API Key")
             if (!is2xx(resp)) return@withContext WbResult.Error(extractError(resp))
             kotlinx.coroutines.delay(120)
