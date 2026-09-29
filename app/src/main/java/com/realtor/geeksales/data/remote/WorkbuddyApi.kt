@@ -199,7 +199,7 @@ class WorkbuddyApi @Inject constructor(
 ) {
     companion object {
         /** 知行朋友圈默认应用地址；可在「数据」页修改，平台迁移/关停时切换 */
-        const val DEFAULT_BASE_URL = "https://api.example.com/api" // 开源版占位地址：请改为自建服务端地址（域名 + /api）
+        const val DEFAULT_BASE_URL = "https://people.app.workbuddy.host/api"
         const val PAGE_SIZE = 100
         private const val PREFS = "tma_prefs"
         private const val KEY_BASE_URL = "wb_base_url"

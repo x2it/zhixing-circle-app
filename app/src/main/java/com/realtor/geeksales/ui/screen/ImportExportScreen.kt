@@ -276,7 +276,7 @@ fun ImportExportScreen(
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("地址应为 自建服务端 域名 + /api（如 https://your-server.com/api）；保存时自动补 /api 并清理多余字符", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    Text("地址应为 域名 + /api（如 https://people.app.workbuddy.host/api）；保存时自动补 /api 并清理多余字符", color = TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                     GeekGhostButton("恢复默认", color = if (busy) TextMuted else Warning, onClick = {
                         if (busy) return@GeekGhostButton
                         vm.resetBaseUrl()
