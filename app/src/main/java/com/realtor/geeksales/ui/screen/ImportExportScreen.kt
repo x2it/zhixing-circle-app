@@ -1,7 +1,9 @@
 package com.realtor.geeksales.ui.screen
 
 import android.Manifest
+import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -449,10 +453,17 @@ fun ImportExportScreen(
                     GeekPrimaryButton(if (busy) "处理中…" else "备份到本地", { if (!busy) { smsAction = 1; smsPermLauncher.launch(Manifest.permission.READ_SMS) } }, Modifier.weight(1f), enabled = !busy)
                     GeekGhostButton(if (busy) "处理中…" else "同步到云端", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) { smsAction = 2; smsPermLauncher.launch(Manifest.permission.READ_SMS) } })
                 }
-                Text(
-                    if (smsGranted) "短信权限：已授权" else "短信权限：未授权（拒绝后需到系统设置开启）",
-                    color = if (smsGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (smsGranted) "短信权限：已授权" else "短信权限：未授权（拒绝后需到系统设置开启）",
+                        color = if (smsGranted) Success else Danger, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f)
+                    )
+                    if (!smsGranted) {
+                        GeekGhostButton("去系统设置开启", color = Warning, onClick = {
+                            runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))) }
+                        })
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GeekGhostButton(if (busy) "处理中…" else "从云端拉取", color = if (busy) TextMuted else TextSecondary, onClick = { if (!busy) vm.importSmsFromWorkbuddy() })
                     Spacer(Modifier.weight(1f))
@@ -471,10 +482,17 @@ fun ImportExportScreen(
                         if (!busy) { callAction = 2; callPermLauncher.launch(Manifest.permission.READ_CALL_LOG) }
                     })
                 }
-                Text(
-                    if (callGranted) "通话记录权限：已授权" else "通话记录权限：未授权（拒绝后需到系统设置开启）",
-                    color = if (callGranted) Success else Danger, style = MaterialTheme.typography.labelMedium
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (callGranted) "通话记录权限：已授权" else "通话记录权限：未授权（拒绝后需到系统设置开启）",
+                        color = if (callGranted) Success else Danger, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f)
+                    )
+                    if (!callGranted) {
+                        GeekGhostButton("去系统设置开启", color = Warning, onClick = {
+                            runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))) }
+                        })
+                    }
+                }
                 Text("同步到云端 = 读取本机通话（呼入/呼出/未接/时长）入库并上传，客户详情「互动档案」可查看；拉取 = 线上通话回本地。重复同步自动补全历史，首次同步自动开启云端开关。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
@@ -509,46 +527,60 @@ fun ImportExportScreen(
                 Text("「追加到通讯录」= 增量：只新增 App 里有而手机通讯录缺失的联系人，绝不删除手机已有联系人；「覆盖通讯录」= 全量重建（见下方危险操作，覆盖时自动重建标签分组），两者用途不同。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // ================= 危险操作（覆盖类统一：自动备份 → 重建，执行前二次确认） =================
-            SectionCard("危险操作", null) {
-                Text("清空所有客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClear = true })
-                Spacer(Modifier.height(6.dp))
-                Text("覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/知行朋友圈备份」，确认后不可撤销。", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
-                Text("覆盖通讯录：以 App 内客户为准全量重建手机通讯录，含标签分组（换机/专用设备用）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "覆盖通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwrite = true })
-                Spacer(Modifier.height(6.dp))
-                Text("覆盖短信记录：以云端短信为准重建本地短信记录。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "覆盖短信记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwriteSms = true })
-                Spacer(Modifier.height(6.dp))
-                Text("覆盖通话记录：以云端通话为准重建本地通话记录。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "覆盖通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmOverwriteCalls = true })
-                Spacer(Modifier.height(6.dp))
-                Text("清空云端短信/通话记录：移除云端存量数据（旧版备份的日期可能是备份时刻，无法修复），清空后点「同步到云端」即可用真实时间重新上传。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "清空云端短信记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudSms = true })
-                Spacer(Modifier.height(6.dp))
-                GeekGhostButton(if (busy) "处理中…" else "清空云端通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudCalls = true })
-                Spacer(Modifier.height(6.dp))
-                Text("清空云端通讯录：删除云端全部联系人（本地与手机通讯录不受影响）。清空后「覆盖通讯录」会以 App 内客户重建云端；或点「同步到云端」重传。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "清空云端通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearCloudContacts = true })
-                Spacer(Modifier.height(6.dp))
-                Text("重置短信同步状态：短信同步读手机系统短信库；若系统短信被清空/恢复后游标异常、或怀疑漏推，重置后下次同步全量对账（服务端幂等，不会重复）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "重置短信同步状态", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmResetSmsSync = true })
-                Spacer(Modifier.height(6.dp))
-                Text("重置通话同步状态：云端通话被删除/清空后，想全量重新备份时用。清空本地上传标记，本地记录保留；重传时服务端幂等跳过已存在项，不会重复。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "重置通话同步状态", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmResetCallSync = true })
+            // ================= 危险操作（遥控面板式：同类聚合为 2 列网格，说明压缩） =================
+            SectionCard("危险操作", "覆盖 = 以一方为准重建另一方，执行前自动备份到「下载/知行朋友圈备份」，确认后不可撤销") {
+                Text("清空全部客户数据，不可恢复，建议先导出备份。", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    GeekGhostButton(if (busy) "处理中…" else "清空全部数据", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClear = true }, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("覆盖（以云端/ App 为准重建本地）", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(4.dp))
+                val overwriteBtns = listOf<Pair<String, () -> Unit>>(
+                    "覆盖通讯录" to { if (!busy) confirmOverwrite = true },
+                    "覆盖短信记录" to { if (!busy) confirmOverwriteSms = true },
+                    "覆盖通话记录" to { if (!busy) confirmOverwriteCalls = true }
+                )
+                overwriteBtns.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        row.forEach { (label, act) -> GeekGhostButton(label, color = Danger, onClick = act, modifier = Modifier.weight(1f)) }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("云端数据（清空 / 重置，均不可撤销）", color = TextSecondary, style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(4.dp))
+                val cloudBtns = listOf<Pair<String, () -> Unit>>(
+                    "清空云端短信" to { if (!busy) confirmClearCloudSms = true },
+                    "清空云端通话" to { if (!busy) confirmClearCloudCalls = true },
+                    "清空云端通讯录" to { if (!busy) confirmClearCloudContacts = true },
+                    "重置短信同步状态" to { if (!busy) confirmResetSmsSync = true },
+                    "重置通话同步状态" to { if (!busy) confirmResetCallSync = true }
+                )
+                cloudBtns.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        row.forEach { (label, act) -> GeekGhostButton(label, color = if (busy) TextMuted else Danger, onClick = act, modifier = Modifier.weight(1f)) }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                Text("清空云端后点「同步到云端」可用真实时间重传；重置 = 清本地增量标记，下次全量对账（服务端幂等不重复）。", color = TextMuted, style = MaterialTheme.typography.bodySmall)
             }
 
             // ================= 清空手机系统数据（删除系统库本身，不可恢复；强确认=输入「清空」） =================
-            SectionCard("清空手机系统数据", "直接删除手机系统自带的短信 / 通话 / 通讯录（不是 App 数据、不是云端）。每个操作前自动备份到「下载/知行朋友圈备份」，并需输入「清空」二字确认，防止误操作。") {
-                Text("清空系统短信：删除手机系统短信库全部短信（需「修改短信」权限）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "清空系统短信", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysSms = true })
-                Spacer(Modifier.height(6.dp))
-                Text("清空系统通话：删除手机系统通话记录全部条目（需「修改通话记录」权限）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "清空系统通话记录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysCalls = true })
-                Spacer(Modifier.height(6.dp))
-                Text("清空系统通讯录：删除手机系统通讯录全部联系人（需「修改联系人」权限，已授权时可用）。", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-                GeekGhostButton(if (busy) "处理中…" else "清空系统通讯录", color = if (busy) TextMuted else Danger, onClick = { if (!busy) confirmClearSysContacts = true })
+            SectionCard("清空手机系统数据", "直接删除手机系统自带的短信 / 通话 / 通讯录（不是 App 数据、不是云端）。每个操作前自动备份，并需输入「清空」二字确认。") {
+                val sysBtns = listOf<Pair<String, () -> Unit>>(
+                    "清空系统短信" to { if (!busy) confirmClearSysSms = true },
+                    "清空系统通话记录" to { if (!busy) confirmClearSysCalls = true },
+                    "清空系统通讯录" to { if (!busy) confirmClearSysContacts = true }
+                )
+                sysBtns.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        row.forEach { (label, act) -> GeekGhostButton(label, color = if (busy) TextMuted else Danger, onClick = act, modifier = Modifier.weight(1f)) }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                Text("分别删除手机系统短信库 / 通话记录 / 通讯录全部内容（需对应「修改」权限，已授权时可用）。", color = TextMuted, style = MaterialTheme.typography.bodySmall)
             }
 
             // ================= 字段说明（通用列 + 模板扩展列，换行业后跟随线上模板更新） =================

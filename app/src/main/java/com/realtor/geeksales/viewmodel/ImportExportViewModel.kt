@@ -1726,14 +1726,14 @@ class ImportExportViewModel @Inject constructor(
             }
             // 0 条也要说清楚：区分"已全部同步过"与"权限/数据问题"，绝不假成功
             val msg = if (pushed == 0 && failed == 0) {
-                // 自动检测系统短信库实际总数：空库 / 权限受限 / 已同步过，三种情况给不同指引
+                // 自动检测系统短信库：读不到(null) / 空库 / 有数据未推送，三种情况给不同指引
                 val sysTotal = runCatching {
-                    ctx.contentResolver.query(smsUri, arrayOf("_id"), null, null, null)?.use { it.count } ?: 0
-                }.getOrDefault(0)
-                if (sysTotal == 0) {
-                    "系统短信库当前为空（可能被清空过）：新短信到达后点「同步到云端」即会自动上传；或点「重置短信同步状态」强制全量对账"
-                } else {
-                    "本机系统短信库有 $sysTotal 条短信，但本次读到 0 条可推送——多为短信读取权限受限（部分手机需在 系统设置 → 应用 → 知行朋友圈 → 权限 → 短信 开启「读取短信」外，还需在系统安全中心允许读取）"
+                    ctx.contentResolver.query(smsUri, arrayOf("_id"), null, null, null)?.use { it.count } ?: -1
+                }.getOrDefault(-1)
+                when {
+                    sysTotal == -1 -> "无法读取系统短信库：系统返回空（多为系统安全中心拦截短信权限，小米/OPPO/vivo 需在 系统设置 → 应用 → 知行朋友圈 → 权限 → 短信 开启「读取短信」并允许读取历史）。请到系统设置开启后重试"
+                    sysTotal == 0 -> "系统短信库当前为空（可能被清空过）：新短信到达后点「同步到云端」即会自动上传；或点「重置短信同步状态」强制全量对账"
+                    else -> "本机系统短信库有 $sysTotal 条短信，但本次读到 0 条可推送——多为短信读取权限受限（部分手机需在 系统设置 → 应用 → 知行朋友圈 → 权限 → 短信 开启「读取短信」外，还需在系统安全中心允许读取）"
                 }
             } else {
                 "短信云端同步完成：推送 $pushed 条（失败 $failed）"
