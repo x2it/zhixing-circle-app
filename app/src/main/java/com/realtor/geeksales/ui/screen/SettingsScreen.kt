@@ -109,8 +109,8 @@ fun SettingsScreen(
             }
             GeekCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("关于 TMA", color = Accent, style = MaterialTheme.typography.labelMedium)
-                    Text("应用名称：TMA // 工作台", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
+                    Text("关于 知行朋友圈", color = Accent, style = MaterialTheme.typography.labelMedium)
+                    Text("应用名称：知行朋友圈", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
                     Text("应用版本：${com.realtor.geeksales.BuildConfig.VERSION_NAME}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
                     Text("目标 SDK：${Build.VERSION.SDK_INT}", color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))

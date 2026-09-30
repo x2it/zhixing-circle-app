@@ -63,7 +63,7 @@ fun ComplianceScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("使用条款 v1", color = Accent, style = MaterialTheme.typography.labelMedium)
                     Text(
-                        "本软件(TMA)为房产经纪人个人自用的电销辅助工具，仅提供拨号与客户管理功能，不提供任何自动外呼、批量骚扰电话等违反工信部与运营商规定的能力。",
+                        "本软件（知行朋友圈）为房产经纪人个人自用的人脉管理与拨号辅助工具，仅提供拨号与客户管理功能，不提供任何自动外呼、批量骚扰电话等违反工信部与运营商规定的能力。",
                         color = TextPrimary, style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
