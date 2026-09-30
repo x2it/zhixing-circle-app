@@ -307,10 +307,9 @@ fun ImportExportScreen(
                     GeekGhostButton(if (keyVisible) "隐藏" else "显示", onClick = { keyVisible = !keyVisible }, color = TextMuted)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GeekGhostButton("保存密钥", color = if (busy) TextMuted else Accent, onClick = {
+                    GeekGhostButton("验证并保存", color = if (busy) TextMuted else Accent, onClick = {
                         if (busy || apiKeyInput.isBlank()) return@GeekGhostButton
-                        val ok = vm.saveApiKey(apiKeyInput)
-                        if (ok) { GlobalToast.showSuccess("API Key 已保存（加密存储）"); apiKeyInput = "" } else GlobalToast.showError("密钥保存失败")
+                        vm.saveAndVerifyApiKey(apiKeyInput)
                     })
                     if (hasKey) {
                         GeekGhostButton("清除密钥", color = if (busy) TextMuted else Danger, onClick = { if (!busy) { vm.clearApiKey(); GlobalToast.showSuccess("密钥已清除") } })

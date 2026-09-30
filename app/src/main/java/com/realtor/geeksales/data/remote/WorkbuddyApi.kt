@@ -927,6 +927,13 @@ class WorkbuddyApi @Inject constructor(
         if (is2xx(body)) WbResult.Success(true) else WbResult.Error(extractError(body))
     }
 
+    /** 用指定 key 探测线上（先验证后保存场景）：不依赖本地已存储的 key */
+    suspend fun verifyKeyWith(key: String): WbResult<Boolean> = withContext(Dispatchers.IO) {
+        val body = execute("GET", "/templates", null, key.trim())
+            ?: return@withContext WbResult.Error("网络请求失败")
+        if (is2xx(body)) WbResult.Success(true) else WbResult.Error(extractError(body))
+    }
+
     private fun get(path: String): String? = request("GET", path, null)
     private fun post(path: String, body: String): String? = request("POST", path, body)
     private fun put(path: String, body: String): String? = request("PUT", path, body)

@@ -858,6 +858,28 @@ class ImportExportViewModel @Inject constructor(
     fun saveApiKey(key: String): Boolean = apiKeyStore.save(key.trim())
     fun clearApiKey() = apiKeyStore.clear()
 
+    /** 验证并保存：先用输入框里的新 key 线上探测，验证通过才落盘；无效 key 不保存 */
+    fun saveAndVerifyApiKey(key: String) {
+        viewModelScope.launch {
+            _status.value = IOStatus(message = "正在验证 API Key…", isError = false, syncSummary = "先验证、通过后才会保存…")
+            when (val r = wbApi.verifyKeyWith(key)) {
+                is WbResult.Success -> {
+                    val ok = saveApiKey(key)
+                    _status.value = IOStatus(
+                        message = if (ok) "验证通过，API Key 已保存（加密存储）" else "验证通过，但本地保存失败",
+                        isError = !ok,
+                        syncSummary = if (ok) "密钥有效并已保存" else "存储异常，请重试"
+                    )
+                }
+                is WbResult.Error -> _status.value = IOStatus(
+                    message = "API Key 验证失败，未保存",
+                    isError = true,
+                    syncSummary = r.message
+                )
+            }
+        }
+    }
+
     /** 一键检测 API Key：轻量探测线上接口，立即区分“密钥无效/撤销”与“网络问题”，不用点同步才知道 */
     fun verifyApiKey() {
         viewModelScope.launch {
